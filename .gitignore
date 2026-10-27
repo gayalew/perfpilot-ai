@@ -4,5 +4,6 @@
 node_modules/
 dist/
 runs/
-*.log
+coverage/
 .DS_Store
+*.log

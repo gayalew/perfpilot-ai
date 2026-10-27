@@ -12,6 +12,7 @@ import { LoadGate } from '../components/QueryState.tsx';
 import { StatusIcon } from '../components/StatusIcon.tsx';
 import { useToast } from '../components/Toast.tsx';
 import { estimateMinutes, formatDuration, formatRelativeTime } from '../format.ts';
+import { FIX_CHOICES } from '../fixes.ts';
 
 function targetOf(project: Project): string {
   if (project.mode === 'url') return project.url || 'No URL';
@@ -31,6 +32,7 @@ export function ProjectPage() {
   const [runs, setRuns] = useState(4);
   const [maxSteps, setMaxSteps] = useState(8);
   const [useAi, setUseAi] = useState(true);
+  const [onlyFixes, setOnlyFixes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [runError, setRunError] = useState('');
@@ -46,7 +48,6 @@ export function ProjectPage() {
         setProject(nextProject);
         setJobs([...nextJobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
         setField(nextField);
-        if (nextProject.mode === 'url') setType('audit');
       })
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Could not load the project'))
       .finally(() => setLoading(false));
@@ -57,13 +58,14 @@ export function ProjectPage() {
   }, [load]);
 
   const active = jobs.find((job) => job.status === 'queued' || job.status === 'running');
-  const minutes = estimateMinutes(type, runs, maxSteps);
+  const selectedFixes = type === 'optimize' || type === 'experiment' ? onlyFixes : [];
+  const minutes = estimateMinutes(type, runs, maxSteps, selectedFixes);
 
   async function start() {
     setBusy(true);
     setRunError('');
     try {
-      const job = await createJob(id, { type, runs, maxSteps, useAi });
+      const job = await createJob(id, { type, runs, maxSteps, useAi, ...(selectedFixes.length ? { onlyFixes: selectedFixes } : {}) });
       navigate(`/jobs/${job.id}`);
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : 'Could not start the run');
@@ -99,14 +101,6 @@ export function ProjectPage() {
               <Button variant="danger" onClick={() => setConfirming(true)}>Delete</Button>
             </div>
           </div>
-          <MonitoringCard project={project} />
-          <FieldCard report={field} busy={fieldBusy} onRefresh={() => {
-            setFieldBusy(true);
-            createJob(id, { type: 'field', runs: 4 })
-              .then((job) => navigate(`/jobs/${job.id}`))
-              .catch((caught: unknown) => toast(caught instanceof Error ? caught.message : 'Could not start the field check'))
-              .finally(() => setFieldBusy(false));
-          }} />
           <Card>
             <h2 className="text-lg font-medium">Run</h2>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -128,7 +122,7 @@ export function ProjectPage() {
               <div>
                 <label htmlFor="runs" className="text-sm font-medium">Runs per side: <span className="tabular-nums">{runs}</span></label>
                 <input id="runs" className="mt-2 w-full accent-indigo-600" type="range" min={4} max={10} value={runs} onChange={(event) => setRuns(Number(event.target.value))} />
-                <p className="mt-1 text-sm text-zinc-500">About {minutes} minutes</p>
+                <p className="mt-1 text-sm text-zinc-500">About {minutes} minutes{selectedFixes.length ? ` for ${selectedFixes.length} ${selectedFixes.length === 1 ? 'fix' : 'fixes'}` : ''}</p>
                 <label htmlFor="steps" className="mt-4 block text-sm font-medium">Max steps: <span className="tabular-nums">{maxSteps}</span></label>
                 <input id="steps" className="mt-2 w-full accent-indigo-600" type="range" min={1} max={12} value={maxSteps} onChange={(event) => setMaxSteps(Number(event.target.value))} />
                 <label className="mt-4 flex items-center gap-2 text-sm">
@@ -137,6 +131,24 @@ export function ProjectPage() {
                 </label>
               </div>
             </div>
+            {(type === 'optimize' || type === 'experiment') && (
+              <fieldset className="mt-4">
+                <legend className="text-sm font-medium">Only try these fixes</legend>
+                <p className="mt-1 text-sm text-zinc-500">None selected tries the whole plan, up to the max steps.</p>
+                <div className="mt-2 grid max-h-36 grid-cols-1 gap-1 overflow-y-auto sm:grid-cols-2">
+                  {FIX_CHOICES.map((fix) => (
+                    <label key={fix.id} className="flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={onlyFixes.includes(fix.id)}
+                        onChange={() => setOnlyFixes((current) => current.includes(fix.id) ? current.filter((item) => item !== fix.id) : [...current, fix.id])}
+                      />
+                      <span>{fix.title}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
             {active && (
               <p className="mt-4 text-sm">
                 A run is already {active.status}. <Link className="text-indigo-700 underline dark:text-indigo-300" to={`/jobs/${active.id}`}>Open it</Link>
@@ -145,11 +157,19 @@ export function ProjectPage() {
             {runError && <p role="alert" className="mt-3 text-sm text-red-700">{runError}</p>}
             <Button className="mt-4" data-testid="run-start" disabled={busy} onClick={() => void start()}>{busy ? 'Starting…' : 'Start'}</Button>
           </Card>
+          <MonitoringCard project={project} />
+          <FieldCard report={field} busy={fieldBusy} onRefresh={() => {
+            setFieldBusy(true);
+            createJob(id, { type: 'field', runs: 4 })
+              .then((job) => navigate(`/jobs/${job.id}`))
+              .catch((caught: unknown) => toast(caught instanceof Error ? caught.message : 'Could not start the field check'))
+              .finally(() => setFieldBusy(false));
+          }} />
           <div>
             <h2 className="mb-3 text-lg font-medium">Run history</h2>
             {jobs.length === 0 ? <p className="text-sm text-zinc-500">No runs yet.</p> : (
               <div className="overflow-x-auto rounded-xl bg-white ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800">
-                <table className="w-full min-w-[40rem] text-left text-sm">
+                <table className="w-full text-left text-sm">
                   <thead className="text-xs uppercase tracking-wide text-zinc-500">
                     <tr>
                       <th className="px-4 py-3 font-medium">Type</th>

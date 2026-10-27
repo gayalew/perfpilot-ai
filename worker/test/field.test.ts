@@ -35,6 +35,22 @@ test('parseCrux reads p75 and the histogram', () => {
   assert.equal(parsed?.metrics.cumulative_layout_shift?.p75, 0.04);
 });
 
+test('parseCrux reads the current LCP name and a string percentile', () => {
+  const parsed = parseCrux({
+    record: {
+      metrics: {
+        largest_contentful_paint: { percentiles: { p75: 3105 }, histogram: [{ density: 0.65 }, { density: 0.2 }, { density: 0.15 }] },
+        cumulative_layout_shift: { percentiles: { p75: '0.05' }, histogram: [{ density: 0.79 }, { density: 0.11 }, { density: 0.1 }] },
+        interaction_to_next_paint: { percentiles: { p75: 204 }, histogram: [{ density: 0.74 }, { density: 0.2 }, { density: 0.06 }] },
+      },
+    },
+  });
+  assert.equal(parsed?.metrics.largest_contentful_paint?.p75, 3105);
+  assert.equal(parsed?.metrics.largest_contentful_paint_ms, undefined);
+  assert.equal(parsed?.metrics.cumulative_layout_shift?.p75, 0.05);
+  assert.equal(parsed?.metrics.interaction_to_next_paint?.p75, 204);
+});
+
 test('fetchField records real API bodies and scrubs the key', async () => {
   const calls: string[] = [];
   const report = await fetchField('https://web.dev/learn', {
@@ -53,6 +69,37 @@ test('fetchField records real API bodies and scrubs the key', async () => {
   assert.match(report.notes.join(' '), /No Chrome UX Report data/);
   assert.equal(calls.some((url) => url.includes('secret-key')), true);
   assert.equal(JSON.stringify(report).includes('secret-key'), false);
+});
+
+test('fetchField keeps a bad status, a timeout, and malformed JSON on the report', async () => {
+  const report = await fetchField('https://example.com/', {
+    apiKey: 'bad-key',
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes('pagespeedonline')) return new Response('nope', { status: 429 });
+      if (url.includes('chromeuxreport')) return new Response('{', { status: 200 });
+      throw new Error('unexpected');
+    },
+  });
+  assert.match(report.notes.join(' '), /PageSpeed Insights HTTP 429/);
+  assert.match(report.notes.join(' '), /JSON/);
+  assert.equal(JSON.stringify(report).includes('bad-key'), false);
+  assert.equal(report.psi, null);
+  assert.equal(report.crux, null);
+});
+
+test('fetchField records an HTTP 500 and scrubs a key embedded in a timeout', async () => {
+  const report = await fetchField('http://localhost:4200/', {
+    apiKey: 'bad-key',
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes('pagespeedonline')) throw new Error('timeout calling key=bad-key');
+      return new Response('upstream', { status: 503 });
+    },
+  });
+  assert.match(report.notes.join(' '), /key=<redacted>/);
+  assert.match(report.notes.join(' '), /Chrome UX Report HTTP 503/);
+  assert.equal(JSON.stringify(report).includes('bad-key'), false);
 });
 
 test('a missing key stores no numbers', async () => {

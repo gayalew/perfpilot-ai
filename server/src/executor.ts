@@ -236,10 +236,10 @@ export class LocalExecutor implements Executor {
           field: payload.field,
         }).catch(() => undefined);
       }
-      await this.emit(active.job.id, 'job-end', payload);
       const project = await this.options.stores.projects.get(active.job.projectId).catch(() => null);
       const notifyPayload = { ...payload, error: typeof payload.error === 'string' ? this.redact(payload.error) : payload.error };
       await this.settled(active.job, project, active.cancelled ? 'cancelled' : ok ? 'succeeded' : 'failed', notifyPayload);
+      await this.emit(active.job.id, 'job-end', payload);
       if (this.active === active) this.active = null;
       active.resolve();
       this.kick();

@@ -39,6 +39,25 @@ test('a runtime fix is kept from real samples and a repo-only fix is skipped', a
   assert.match(reserve?.reason ?? '', /repository/);
 });
 
+test('measurePair compares an interleaved raw URL against the proxy URL', async () => {
+  const plan = heuristicPlan([findings[0]!]);
+  const seen: string[] = [];
+  const report = await runRuntimeExperiments({
+    url: 'http://example.test/',
+    findings: [findings[0]!],
+    plan,
+    measure: async () => { throw new Error('the raw page must be measured inside the pair'); },
+    measurePair: async (baselineUrl, candidateUrl) => {
+      seen.push(baselineUrl, candidateUrl);
+      return [measurement(baselineUrl, 40, 3200), measurement(candidateUrl, 80, 1400)];
+    },
+    openProxy: async () => ({ url: 'http://127.0.0.1:9/proxied', close: async () => undefined }),
+  });
+  assert.deepEqual(seen, ['http://example.test/', 'http://127.0.0.1:9/proxied']);
+  assert.equal(report.baseline?.score?.median, 40);
+  assert.equal(report.steps[0]?.status, 'kept');
+});
+
 test('a candidate that does not improve is reverted', async () => {
   const plan = heuristicPlan([findings[0]!]);
   const report = await runRuntimeExperiments({

@@ -45,6 +45,7 @@ test('the actions executor dispatches once and records the posted result', async
     },
   });
   await actions.start(job);
+  await actions.start(job);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.includes('secret-token'), false);
   const running = await stores.jobs.get(job.id);

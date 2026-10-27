@@ -11,7 +11,7 @@ import { redactSecrets } from '../src/redact.js';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
-function executorFor(script: string, stores: ReturnType<typeof createMemoryStores>, bus: EventBus, env: NodeJS.ProcessEnv = {}) {
+function executorFor(script: string, stores: ReturnType<typeof createMemoryStores>, bus: EventBus, env: NodeJS.ProcessEnv = {}, onSettled?: LocalExecutor extends never ? never : (info: { job: { id: string } }) => Promise<void>) {
   return new LocalExecutor({
     stores,
     bus,
@@ -24,6 +24,7 @@ function executorFor(script: string, stores: ReturnType<typeof createMemoryStore
       shell: false,
     }),
     specFor: (job) => ({ jobId: job.id }),
+    onSettled,
   });
 }
 
@@ -54,6 +55,23 @@ test('jobs run one at a time in queue order', async () => {
   const secondJob = await stores.jobs.get(second.id);
   assert.ok(firstJob?.finishedAt && secondJob?.startedAt);
   assert.ok(firstJob.finishedAt <= secondJob.startedAt);
+});
+
+test('a finished job stores its notification before the job-end event', async () => {
+  const stores = createMemoryStores();
+  const bus = new EventBus();
+  const order: string[] = [];
+  const executor = executorFor('exit-child.mjs', stores, bus, {}, async () => {
+    order.push('notify');
+  });
+  const project = await stores.projects.create({ name: 'p', mode: 'url', url: 'http://localhost:4200/' });
+  const job = await stores.jobs.create({ projectId: project.id, type: 'experiment', params: {} });
+  bus.subscribe(job.id, (event) => {
+    if (event.type === 'job-end') order.push('job-end');
+  });
+  await executor.start(job);
+  await waitFor(async () => (await stores.jobs.get(job.id))?.status === 'succeeded', 'experiment');
+  assert.deepEqual(order, ['notify', 'job-end']);
 });
 
 test('cancel kills the child and marks the job cancelled', async () => {

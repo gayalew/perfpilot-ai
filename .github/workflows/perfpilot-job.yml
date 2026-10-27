@@ -5,6 +5,13 @@
 # arrives as an input and must be reachable from GitHub (a public PerfPilot URL).
 name: PerfPilot job
 
+permissions:
+  contents: read
+
+concurrency:
+  group: perfpilot-job-${{ inputs.job_id }}
+  cancel-in-progress: false
+
 on:
   workflow_dispatch:
     inputs:
@@ -34,6 +41,14 @@ jobs:
           CALLBACK: ${{ inputs.callback_url }}
           JOB_ID: ${{ inputs.job_id }}
         run: |
+          case "$JOB_ID" in
+            [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;;
+            *) echo "invalid job id" >&2; exit 1 ;;
+          esac
+          case "$CALLBACK" in
+            http://*|https://*) ;;
+            *) echo "invalid callback url" >&2; exit 1 ;;
+          esac
           curl -fsS -X POST \
             -H "x-job-secret: $JOB_SECRET" \
             -H "content-type: application/json" \
@@ -49,6 +64,14 @@ jobs:
           CALLBACK: ${{ inputs.callback_url }}
           JOB_ID: ${{ inputs.job_id }}
         run: |
+          case "$JOB_ID" in
+            [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;;
+            *) echo "invalid job id" >&2; exit 1 ;;
+          esac
+          case "$CALLBACK" in
+            http://*|https://*) ;;
+            *) echo "invalid callback url" >&2; exit 1 ;;
+          esac
           spec=$(curl -fsS -H "x-job-secret: $JOB_SECRET" "$CALLBACK/api/internal/jobs/$JOB_ID/spec")
           printf '%s\n' "$spec" | node ./node_modules/tsx/dist/cli.mjs worker/src/job-runner.ts | while IFS= read -r line; do
             printf '%s' "$line" | curl -fsS -X POST \
@@ -57,3 +80,12 @@ jobs:
               --data-binary @- \
               "$CALLBACK/api/internal/jobs/$JOB_ID/events" || true
           done
+      - name: Record the job id
+        if: always()
+        run: printf '%s\n' "finished" > "$RUNNER_TEMP/perfpilot-status.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perfpilot-status
+          path: ${{ runner.temp }}/perfpilot-status.txt
+          retention-days: 1

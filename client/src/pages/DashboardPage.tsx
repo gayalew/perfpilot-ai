@@ -99,7 +99,7 @@ export function DashboardPage() {
             <h2 className="mb-3 mt-10 text-lg font-medium">Recent runs</h2>
             {data.jobs.length === 0 ? <p className="text-sm text-zinc-500">No runs yet.</p> : (
               <div className="overflow-x-auto rounded-xl bg-white ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800">
-                <table className="w-full min-w-[36rem] text-left text-sm">
+                <table className="w-full text-left text-sm">
                   <thead className="text-xs uppercase tracking-wide text-zinc-500">
                     <tr>
                       <th className="px-4 py-3 font-medium">Project</th>

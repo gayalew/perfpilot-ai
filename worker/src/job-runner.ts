@@ -2,12 +2,13 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { aggregate, measureUrl, values } from './measure.js';
+import type { Comparison } from './compare.js';
+import { aggregate, measureInterleaved, measureUrl, values } from './measure.js';
 import { METRICS } from './metrics.js';
 import { extractFindings } from './diagnose.js';
 import { planFixes } from './gemini.js';
 import { runLighthouseOnce } from './lighthouse-runner.js';
-import { optimize, buildPrBody, baselineEvent, planEvent, type Ledger } from './optimize.js';
+import { optimize, buildPrBody, baselineEvent, filterPlan, planEvent, type Ledger } from './optimize.js';
 import { renderReportHtml } from './report/html.js';
 import { renderReportPdf } from './report/pdf.js';
 import { git } from './repo.js';
@@ -208,7 +209,8 @@ async function runExperiment(spec: JobSpec): Promise<void> {
   if (spec.project.mode !== 'url') throw new Error('experiment requires a URL project');
   const lhr = await runLighthouseOnce({ url, profile: 'mobile' });
   const findings = extractFindings(lhr);
-  const plan = await planFixes(findings, { apiKey: '', maxSteps: spec.maxSteps });
+  const planned = await planFixes(findings, { apiKey: '', maxSteps: spec.maxSteps });
+  const plan = filterPlan(planned, findings, spec.onlyFixes);
   const report = await runRuntimeExperiments({
     url,
     runs: spec.runs,
@@ -217,9 +219,10 @@ async function runExperiment(spec: JobSpec): Promise<void> {
     findings,
     plan,
     measure: (target) => measureUrl({ url: target, runs: spec.runs, profile: 'mobile', onProgress: () => undefined }),
+    measurePair: (baselineUrl, candidateUrl) => measureInterleaved(baselineUrl, candidateUrl, { runs: spec.runs, profile: 'mobile', onProgress: () => undefined }),
     onEvent: (event) => emit(event.type, event),
   });
-  const ledger = {
+  const ledger: Ledger = {
     runId: spec.jobId,
     repo: url,
     startedAt: new Date().toISOString(),
@@ -227,9 +230,26 @@ async function runExperiment(spec: JobSpec): Promise<void> {
     aiSource: 'runtime',
     baseline: report.baseline,
     final: null,
-    steps: report.steps,
+    finalComparison: null,
+    steps: report.steps.map((step) => ({
+      order: step.order,
+      fix: step.fix,
+      title: step.title,
+      status: step.status,
+      reason: step.reason,
+      files: [],
+      gates: step.gates.map((gate) => ({
+        name: gate.name as 'performance',
+        passed: gate.passed,
+        details: gate.details,
+        ms: 0,
+        comparison: (gate.comparison as Comparison | null | undefined) ?? undefined,
+      })),
+      metrics: [],
+    })),
     runs: spec.runs,
   };
+  await writeReport(spec, ledger, null);
   emit('job-end', {
     ok: true,
     baseline: report.baseline,

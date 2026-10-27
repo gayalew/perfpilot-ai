@@ -102,7 +102,7 @@ function ExperimentCard({ experiment, running }: { experiment: Experiment; runni
         {experiment.reason && <p className="mt-3 text-sm">{experiment.reason}</p>}
         {experiment.metrics.length > 0 && (
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[28rem] text-left text-sm">
+            <table className="w-full text-left text-sm">
               <thead className="text-xs uppercase tracking-wide text-zinc-500">
                 <tr>
                   <th className="py-1 pr-3 font-medium">Metric</th>
@@ -291,7 +291,7 @@ export function JobPage() {
               </div>
               {monitor?.comparisons && monitor.comparisons.length > 0 ? (
                 <div className="mt-4 overflow-x-auto">
-                  <table className="w-full min-w-[32rem] text-left text-sm">
+                  <table className="w-full text-left text-sm">
                     <thead className="text-xs uppercase tracking-wide text-zinc-500">
                       <tr>
                         <th className="py-2 pr-3 font-medium">Metric</th>
@@ -395,6 +395,9 @@ export function JobPage() {
                   <Button className="mt-3" href={`/projects/${job.projectId}`}>Run again</Button>
                 </div>
               )}
+              {job.type === 'experiment' && view.ok !== false && (
+                <p className="mt-3 text-sm font-medium">{view.counts?.kept ?? 0} proven runtime improvements</p>
+              )}
               {view.counts && (
                 <p className="mt-3 text-sm">
                   <span className="text-emerald-700 dark:text-emerald-300">{view.counts.kept} kept</span>
@@ -415,7 +418,7 @@ export function JobPage() {
                     <span className="inline-flex items-center gap-1.5"><span className="inline-block h-1.5 w-6 rounded-full bg-amber-500" /> After, regressed</span>
                   </div>
                   <div className="mt-2 overflow-x-auto">
-                    <table className="w-full min-w-[40rem] text-left text-sm">
+                    <table className="w-full text-left text-sm">
                       <thead className="text-xs uppercase tracking-wide text-zinc-500">
                         <tr>
                           <th className="py-2 pr-3 font-medium">Metric</th>

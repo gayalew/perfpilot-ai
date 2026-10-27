@@ -148,8 +148,15 @@ export function getProjectSummary(id: string): Promise<ProjectSummary> {
   return request(`/api/projects/${id}/summary`);
 }
 
-export function createJob(projectId: string, input: { type: JobType; runs: number; maxSteps?: number; useAi?: boolean }): Promise<Job> {
-  return request(`/api/projects/${projectId}/jobs`, { method: 'POST', body: JSON.stringify(input) });
+export function createJob(projectId: string, input: { type: JobType; runs: number; maxSteps?: number; useAi?: boolean; onlyFixes?: string[] }): Promise<Job> {
+  const body = {
+    type: input.type,
+    runs: input.runs,
+    ...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
+    ...(input.useAi === undefined ? {} : { useAi: input.useAi }),
+    ...(input.onlyFixes && input.onlyFixes.length > 0 ? { onlyFixes: input.onlyFixes } : {}),
+  };
+  return request(`/api/projects/${projectId}/jobs`, { method: 'POST', body: JSON.stringify(body) });
 }
 
 export interface FieldMetric {

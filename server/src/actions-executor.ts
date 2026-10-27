@@ -33,9 +33,13 @@ export interface ActionsExecutorOptions {
 
 /** Dispatches perfpilot-job.yml and records events that the workflow posts back. */
 export class GithubActionsExecutor implements Executor {
+  private readonly dispatched = new Set<string>();
+
   constructor(private readonly options: ActionsExecutorOptions) {}
 
   async start(job: Job): Promise<void> {
+    if (this.dispatched.has(job.id)) return;
+    this.dispatched.add(job.id);
     const project = await this.options.stores.projects.get(job.projectId);
     if (!project) {
       await this.fail(job.id, 'project not found');

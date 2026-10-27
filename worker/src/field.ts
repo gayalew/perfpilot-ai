@@ -25,7 +25,9 @@ export interface FieldReport {
 }
 
 function num(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
+  return null;
 }
 
 function scrub(text: string, apiKey: string): string {
@@ -71,7 +73,7 @@ function histogram(metric: unknown): Pick<CruxMetric, 'good' | 'ni' | 'poor'> {
   return { good: density(0), ni: density(1), poor: density(2) };
 }
 
-const CRUX_KEYS = ['largest_contentful_paint_ms', 'interaction_to_next_paint', 'cumulative_layout_shift'] as const;
+const CRUX_KEYS = ['largest_contentful_paint', 'largest_contentful_paint_ms', 'interaction_to_next_paint', 'cumulative_layout_shift'] as const;
 
 /** Reads a Chrome UX Report record. A 404 payload is not a record. */
 export function parseCrux(payload: unknown): FieldReport['crux'] {
@@ -84,10 +86,14 @@ export function parseCrux(payload: unknown): FieldReport['crux'] {
   const out: Record<string, CruxMetric> = {};
   for (const key of CRUX_KEYS) {
     const metric = table[key];
-    const percentiles = metric && typeof metric === 'object' ? (metric as { percentiles?: { p75?: unknown } }).percentiles : undefined;
+    if (!metric || typeof metric !== 'object') continue;
+    const percentiles = (metric as { percentiles?: { p75?: unknown } }).percentiles;
     const bins = histogram(metric);
-    out[key] = { p75: num(percentiles?.p75), ...bins };
+    const parsed = { p75: num(percentiles?.p75), ...bins };
+    if (parsed.p75 == null && parsed.good == null && parsed.ni == null && parsed.poor == null) continue;
+    out[key] = parsed;
   }
+  if (Object.keys(out).length === 0) return null;
   return { formFactor: 'PHONE', metrics: out };
 }
 

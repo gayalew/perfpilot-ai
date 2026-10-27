@@ -66,8 +66,14 @@ describe('format helpers', () => {
     expect(isQuietChange(null, 1, 'unchanged')).toBe(false);
   });
 
-  test('estimates run length', () => {
-    expect(estimateMinutes('audit', 4, 8)).toBeGreaterThan(0);
-    expect(estimateMinutes('optimize', 4, 8)).toBeGreaterThan(estimateMinutes('audit', 4, 8));
+  test('estimates run length from the job type, runs, and selected fixes', () => {
+    expect(estimateMinutes('audit', 4, 8)).toBe(3);
+    expect(estimateMinutes('monitor', 5, 8)).toBe(4);
+    expect(estimateMinutes('field', 4, 8)).toBe(2);
+    expect(estimateMinutes('optimize', 4, 8)).toBe(20);
+    expect(estimateMinutes('optimize', 4, 8, [])).toBe(20);
+    expect(estimateMinutes('optimize', 4, 8, ['defer-scripts', 'minify-assets', 'optimize-images'])).toBe(14);
+    expect(estimateMinutes('experiment', 4, 8)).toBe(13);
+    expect(estimateMinutes('experiment', 4, 8, ['defer-scripts'])).toBe(6);
   });
 });

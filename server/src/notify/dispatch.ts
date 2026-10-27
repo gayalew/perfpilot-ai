@@ -80,6 +80,15 @@ export function prMessage(project: Project, kept: number, ledger: unknown, prUrl
   return { kind: 'pr', subject, text, html, telegramHtml };
 }
 
+export function experimentMessage(project: Project, kept: number, origin: string, jobId: string): Outbound {
+  const link = jobLink(origin, jobId);
+  const subject = `PerfPilot runtime experiment: ${kept} proven improvements on ${project.name}`;
+  const text = `${subject}\n\n${link}`;
+  const html = `<div style="font-family:Segoe UI,sans-serif;color:#18181b;line-height:1.5"><p>${escapeHtml(subject)}</p><p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p></div>`;
+  const telegramHtml = `<b>${escapeTelegramHtml(subject)}</b>\n<a href="${escapeTelegramHtml(link)}">${escapeTelegramHtml(link)}</a>`;
+  return { kind: 'experiment', subject, text, html, telegramHtml };
+}
+
 export function failureMessage(project: Project, jobId: string, error: string, origin: string): Outbound {
   const link = jobLink(origin, jobId);
   const subject = `PerfPilot job failed on ${project.name}`;
@@ -219,6 +228,12 @@ export async function notifyJobOutcome(env: NotifyEnv, stores: Stores, input: { 
     if (input.status === 'failed' || payload.ok === false) {
       const raw = typeof payload.error === 'string' ? payload.error : input.job.error ?? 'job failed';
       await deliver(env, stores, input.project, input.job.id, failureMessage(input.project, input.job.id, raw.slice(0, 500), env.clientOrigin));
+      return;
+    }
+    if (input.job.type === 'experiment' && input.status === 'succeeded') {
+      const message = experimentMessage(input.project, keptCount(payload), env.clientOrigin, input.job.id);
+      if (input.pdf) message.pdf = input.pdf;
+      await deliver(env, stores, input.project, input.job.id, message);
       return;
     }
     const prUrl = typeof payload.prUrl === 'string' ? payload.prUrl : '';

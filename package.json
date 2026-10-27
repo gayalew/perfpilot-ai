@@ -2,11 +2,19 @@
   "name": "perfpilot-ai",
   "version": "0.1.0",
   "private": true,
-  "description": "PerfPilot AI: an autonomous web performance engineer",
+  "description": "Autonomous web performance engineer: measure, diagnose, fix, prove, and monitor.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/placeholder/perfpilot-ai"
+  },
   "workspaces": ["worker", "server", "client", "demo-site"],
   "engines": { "node": ">=20.6" },
   "scripts": {
     "test": "npm run test --workspace worker && npm run test --workspace server && npm run test --workspace client",
+    "verify": "npm test && npm run typecheck --workspace worker && npm run typecheck --workspace server && npm run build --workspace client && node scripts/scan-secrets.mjs",
+    "demo:check": "node --env-file=.env scripts/demo-check.mjs",
+    "demo:reset": "node --env-file=.env scripts/demo-reset.mjs",
     "dev": "concurrently -n server,client -c blue,magenta \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "npm run start --workspace server",
     "dev:client": "npm run dev --workspace client",

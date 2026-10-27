@@ -35,6 +35,8 @@ export interface RuntimeOptions {
   findings: Finding[];
   plan: Plan;
   measure: (url: string) => Promise<Measurement>;
+  /** When set, each step is measured as an interleaved pair: raw URL, then the proxy URL. */
+  measurePair?: (baselineUrl: string, candidateUrl: string) => Promise<[Measurement, Measurement]>;
   openProxy?: (options: { target: string; fix: string; items: RuntimeItem[] }) => Promise<RuntimeProxy>;
   onEvent?: (event: RuntimeEvent) => void;
 }
@@ -64,22 +66,24 @@ export async function runRuntimeExperiments(options: RuntimeOptions): Promise<Ru
     .slice(0, options.maxSteps ?? 12);
   emit({ type: 'job-start', jobType: 'experiment' });
   emit(planEvent(options.plan));
-  const baseline = await options.measure(options.url);
-  const baselineAggregate = aggregate(baseline);
-  emit(baselineEvent(baselineAggregate, options.findings.length));
+  const holder: { baseline: Measurement | null } = { baseline: null };
+  if (!options.measurePair) {
+    holder.baseline = await options.measure(options.url);
+    emit(baselineEvent(aggregate(holder.baseline), options.findings.length));
+  }
   const recorded: RuntimeStep[] = [];
   for (const step of steps) {
-    recorded.push(await runStep(step, options, baseline, openProxy, emit));
+    recorded.push(await runStep(step, options, holder, openProxy, emit));
   }
   const kept = recorded.filter((step) => step.status === 'kept').length;
   emit({ type: 'run-end', kept, reverted: recorded.filter((step) => step.status === 'reverted').length, skipped: recorded.filter((step) => step.status === 'skipped').length });
-  return { url: options.url, plan: options.plan, findings: options.findings, baseline: baselineAggregate, steps: recorded };
+  return { url: options.url, plan: options.plan, findings: options.findings, baseline: holder.baseline ? aggregate(holder.baseline) : null, steps: recorded };
 }
 
 async function runStep(
   step: PlanStep,
   options: RuntimeOptions,
-  baseline: Measurement,
+  holder: { baseline: Measurement | null },
   openProxy: NonNullable<RuntimeOptions['openProxy']>,
   emit: (event: RuntimeEvent) => void,
 ): Promise<RuntimeStep> {
@@ -94,12 +98,35 @@ async function runStep(
   try {
     proxy = await openProxy({ target: options.url, fix: step.fix, items });
     emit({ type: 'gate-start', order: step.order, fix: step.fix, gate: 'performance' });
-    const candidate = await options.measure(proxy.url);
+    let baseline = holder.baseline;
+    let candidate: Measurement;
+    if (options.measurePair) {
+      const pair = await options.measurePair(options.url, proxy.url);
+      if (!holder.baseline) {
+        holder.baseline = pair[0];
+        emit(baselineEvent(aggregate(pair[0]), options.findings.length));
+      }
+      baseline = pair[0];
+      candidate = pair[1];
+    } else {
+      candidate = await options.measure(proxy.url);
+    }
+    if (!baseline) throw new Error('the baseline measurement is missing');
     const comparison = compareMeasurements(baseline, candidate);
     const judged = judgePerformance(comparison);
     const metrics = comparison.metrics.map((metric) => ({ ...metric, countedAsHarm: regressionCountsAsHarm(metric) }));
     const gate = { name: 'performance', passed: judged.passed, details: judged.details, comparison: { ...comparison, metrics } };
-    emit({ type: 'gate-end', order: step.order, fix: step.fix, gate: 'performance', passed: judged.passed, details: judged.details, ms: 0 });
+    emit({
+      type: 'gate-end',
+      order: step.order,
+      fix: step.fix,
+      gate: 'performance',
+      passed: judged.passed,
+      details: judged.details,
+      ms: 0,
+      runsPerSide: options.runs ?? 4,
+      comparison: { verdict: comparison.verdict, metrics },
+    });
     const status = judged.passed ? 'kept' : 'reverted';
     const reason = judged.passed ? judged.details : judged.details || 'the proxied page did not improve';
     emit({ type: 'step-end', order: step.order, fix: step.fix, status, reason });

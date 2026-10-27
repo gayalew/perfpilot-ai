@@ -129,9 +129,11 @@ export function isQuietChange(before: number | null, after: number | null, verdi
   return Math.abs((after - before) / Math.abs(before)) * 100 < 0.5;
 }
 
-export function estimateMinutes(type: 'audit' | 'optimize' | 'monitor' | 'experiment' | 'field', runs: number, maxSteps: number): number {
+/** None selected means the plan, capped by max steps. A selection uses that count, still capped by max steps. */
+export function estimateMinutes(type: 'audit' | 'optimize' | 'monitor' | 'experiment' | 'field', runs: number, maxSteps: number, onlyFixes: readonly string[] = []): number {
+  const steps = onlyFixes.length > 0 ? Math.min(onlyFixes.length, maxSteps) : maxSteps;
   if (type === 'field') return 2;
   if (type === 'audit' || type === 'monitor') return Math.max(2, Math.round(runs * 0.8));
-  if (type === 'experiment') return Math.max(6, Math.round(runs * 1.2 + maxSteps));
-  return Math.max(8, Math.round(4 + runs * 1.5 + maxSteps * 1.2));
+  if (type === 'experiment') return Math.max(6, Math.round(runs * 1.2 + steps));
+  return Math.max(8, Math.round(4 + runs * 1.5 + steps * 1.2));
 }

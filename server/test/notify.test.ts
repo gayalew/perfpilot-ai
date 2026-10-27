@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMemoryStores } from '../src/repo/memory.js';
 import type { Project } from '../src/types.js';
-import { failureMessage, notifyEnvFrom, prMessage, resetNotifySkipLog, sendNotification, testMessage, type NotifyEnv } from '../src/notify/dispatch.js';
+import { experimentMessage, failureMessage, notifyEnvFrom, notifyJobOutcome, prMessage, resetNotifySkipLog, sendNotification, testMessage, type NotifyEnv } from '../src/notify/dispatch.js';
 
 const SECRET = 'resend-secret-value';
 const TOKEN = 'telegram-secret-token';
@@ -122,6 +122,30 @@ test('a missing recipient is skipped once and stores nothing', async () => {
   assert.equal((await stores.notifications.listByJob('job-2')).length, 0);
   assert.match(failureMessage(created, 'job-2', 'boom <script>', 'http://localhost:5173').html, /boom &lt;script&gt;/);
   assert.match(failureMessage(created, 'job-2', 'boom <script>', 'http://localhost:5173').html, /http:\/\/localhost:5173\/jobs\/job-2/);
+});
+
+test('an experiment success notifies both channels and attaches the pdf', async () => {
+  const stores = createMemoryStores();
+  const created = await stores.projects.create({ name: 'Demo', mode: 'url', url: 'http://localhost:4200/', notifyEmail: 'ops@example.com', telegramChatId: '12345' });
+  const job = await stores.jobs.create({ projectId: created.id, type: 'experiment', params: { runs: 4 } });
+  const calls: string[] = [];
+  const blank = env(async (url, init) => {
+    calls.push(`${url}\n${typeof init?.body === 'string' ? init.body : ''}`);
+    return ok();
+  });
+  await notifyJobOutcome(blank, stores, {
+    project: created,
+    job,
+    status: 'succeeded',
+    payload: { ok: true, ledger: { steps: [{ status: 'kept' }] } },
+    pdf: Buffer.from('%PDF'),
+  });
+  const rows = await stores.notifications.listByJob(job.id);
+  assert.deepEqual(rows.map((row) => `${row.channel}:${row.kind}:${row.status}`), ['email:experiment:sent', 'telegram:experiment:sent']);
+  assert.match(calls.join('\n'), /api\.resend\.com\/emails/);
+  assert.match(calls.join('\n'), /report\.pdf/);
+  assert.match(calls.join('\n'), /sendDocument/);
+  assert.match(experimentMessage(created, 1, 'http://localhost:5173', job.id).subject, /1 proven improvements/);
 });
 
 test('notify env reads names without requiring them', () => {

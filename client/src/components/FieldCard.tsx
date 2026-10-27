@@ -4,6 +4,7 @@ import { Button } from './Button.tsx';
 import { Card } from './Card.tsx';
 
 const CRUX_LABELS: Record<string, string> = {
+  largest_contentful_paint: 'LCP',
   largest_contentful_paint_ms: 'LCP',
   interaction_to_next_paint: 'INP',
   cumulative_layout_shift: 'CLS',
@@ -12,6 +13,23 @@ const CRUX_LABELS: Record<string, string> = {
 function cls(value: number | null): string {
   if (value == null) return 'n/a';
   return value.toFixed(3);
+}
+
+function rating(value: number | null): string {
+  if (value == null) return 'n/a';
+  return `${Math.round(value * 100)}%`;
+}
+
+function p75Rating(key: string, value: number | null): string {
+  if (value == null) return 'n/a';
+  const bands = key === 'cumulative_layout_shift'
+    ? [0.1, 0.25]
+    : key === 'interaction_to_next_paint'
+      ? [200, 500]
+      : [2500, 4000];
+  if (value <= bands[0]) return 'good';
+  if (value <= bands[1]) return 'needs improvement';
+  return 'poor';
 }
 
 export function FieldCard({ report, onRefresh, busy = false }: { report: FieldReport | null; onRefresh?: () => void; busy?: boolean }) {
@@ -44,7 +62,11 @@ export function FieldCard({ report, onRefresh, busy = false }: { report: FieldRe
                 {Object.entries(crux).map(([key, metric]) => (
                   <div key={key} className="flex justify-between gap-3">
                     <dt>{CRUX_LABELS[key] ?? key} p75</dt>
-                    <dd className="tabular-nums">{key === 'cumulative_layout_shift' ? cls(metric.p75) : formatMs(metric.p75)}</dd>
+                    <dd className="text-right tabular-nums">
+                      {key === 'cumulative_layout_shift' ? cls(metric.p75) : formatMs(metric.p75)}
+                      <span className="ml-2">· {p75Rating(key, metric.p75)}</span>
+                      <span className="ml-2 text-zinc-500">good {rating(metric.good)} · ni {rating(metric.ni)} · poor {rating(metric.poor)}</span>
+                    </dd>
                   </div>
                 ))}
               </dl>
