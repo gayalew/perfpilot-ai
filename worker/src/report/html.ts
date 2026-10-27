@@ -169,3 +169,79 @@ ${revertedHtml}
 </body>
 </html>`;
 }
+
+export interface MonitorReportInput {
+  projectName: string;
+  target: string;
+  generatedAt: string;
+  status: string;
+  comparisons: Array<{ key: MetricKey | string; label: string; baselineMedian: number; candidateMedian: number; relativeChange: number; verdict: string }>;
+  trend: Array<{ takenAt: string; status: string; medians: Record<string, number | null> }>;
+  suspects: string;
+}
+
+export function renderMonitorReportHtml(input: MonitorReportInput): string {
+  const rows = input.comparisons.map((row) => {
+    const key = row.key as MetricKey;
+    const before = formatMetric(key, row.baselineMedian);
+    const after = formatMetric(key, row.candidateMedian);
+    const change = Number.isFinite(row.relativeChange) ? `${row.relativeChange >= 0 ? '+' : ''}${(row.relativeChange * 100).toFixed(0)}%` : 'n/a';
+    return `<tr><td>${escapeHtml(row.label)}</td><td class="num">${escapeHtml(before)}</td><td class="num">${escapeHtml(after)}</td><td class="num">${escapeHtml(change)}</td><td>${escapeHtml(row.verdict)}</td><td>${bars(row.baselineMedian, row.candidateMedian)}</td></tr>`;
+  }).join('') || '<tr><td colspan="6">No comparison yet.</td></tr>';
+  const trendKeys = ['score', 'lcp', 'tbt', 'cls'] as const;
+  const trend = input.trend.slice(-10).map((point) => {
+    const cells = trendKeys.map((key) => `<td class="num">${escapeHtml(formatMetric(key, point.medians[key] ?? null))}</td>`).join('');
+    return `<tr><td>${escapeHtml(point.takenAt)}</td><td>${escapeHtml(point.status)}</td>${cells}</tr>`;
+  }).join('') || '<tr><td colspan="6">No earlier checks.</td></tr>';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PerfPilot monitor report</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", sans-serif; color: #18181b; font-size: 12px; line-height: 1.45; }
+  h1 { font-size: 28px; font-weight: 560; margin: 0 0 8px; }
+  h2 { font-size: 16px; margin: 22px 0 8px; break-after: avoid; }
+  p { margin: 0 0 6px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #e4e4e7; vertical-align: middle; }
+  th { font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: #71717a; }
+  .num { font-variant-numeric: tabular-nums; }
+  .bars { width: 72px; }
+  .bar { height: 5px; border-radius: 3px; margin: 2px 0; }
+  .bar.before { background: #d4d4d8; }
+  .bar.after { background: #4f46e5; }
+  @page { size: A4; margin: 14mm; }
+</style>
+</head>
+<body>
+<section>
+  <h1>PerfPilot monitor</h1>
+  <p>${escapeHtml(input.projectName)}</p>
+  <p>Target: ${escapeHtml(input.target)}</p>
+  <p>Date: ${escapeHtml(input.generatedAt)}</p>
+  <p>Status: ${escapeHtml(input.status)}</p>
+</section>
+<h2>Comparison</h2>
+<table>
+  <thead><tr><th>Metric</th><th>Reference</th><th>Now</th><th>Change</th><th>Verdict</th><th></th></tr></thead>
+  <tbody>${rows}</tbody>
+</table>
+<h2>Recent checks</h2>
+<table>
+  <thead><tr><th>When</th><th>Status</th><th>Score</th><th>LCP</th><th>TBT</th><th>CLS</th></tr></thead>
+  <tbody>${trend}</tbody>
+</table>
+<h2>Suspects</h2>
+<p>${escapeHtml(input.suspects)}</p>
+<h2>Methodology</h2>
+<section>
+  <p>Lighthouse mobile, simulated slow 4G. Each check is a real measurement, not a synthetic sample.</p>
+  <p>Score, LCP, TBT, and CLS are compared with the pooled runs of the last healthy checks using a one-sided Mann-Whitney U test, a minimum effect size, and the reference noise floor.</p>
+  <p>A metric counts only when the regression is harmful under the same Core Web Vitals harm policy as an optimize gate. Two consecutive harmful checks open one incident. A later healthy check closes it. The tool never merges.</p>
+</section>
+</body>
+</html>`;
+}

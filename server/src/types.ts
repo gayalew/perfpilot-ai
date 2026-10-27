@@ -1,5 +1,6 @@
 export type ProjectMode = 'url' | 'repo';
-export type JobType = 'audit' | 'optimize';
+export type JobType = 'audit' | 'optimize' | 'monitor';
+export type MeasurementStatus = 'ok' | 'learning' | 'breach' | 'regression';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface ProjectInput {
@@ -72,6 +73,22 @@ export interface Measurement {
   takenAt: string;
   profile: string;
   metrics: unknown;
+  status: MeasurementStatus;
+  compared: unknown;
+  samples: unknown;
+  medians: unknown;
+}
+
+export interface Incident {
+  id: string;
+  projectId: string;
+  openedAt: string;
+  closedAt: string | null;
+  firstMeasurementId: number | null;
+  lastMeasurementId: number | null;
+  alertSentAt: string | null;
+  recoverySentAt: string | null;
+  details: unknown;
 }
 
 export interface Notification {

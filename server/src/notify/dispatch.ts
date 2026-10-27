@@ -114,13 +114,48 @@ function skip(env: NotifyEnv, channel: 'email' | 'telegram', reason: string): Ch
   return { status: 'skipped', error: reason };
 }
 
-async function deliver(env: NotifyEnv, stores: Stores, project: Project, jobId: string | null, message: Outbound): Promise<{ email: ChannelResult; telegram: ChannelResult }> {
+export function regressionMessage(project: Project, jobId: string, origin: string, lines: string[], since: string, suspects: string): Outbound {
+  const link = jobLink(origin, jobId);
+  const projectLink = `${origin.replace(/\/$/, '')}/projects/${project.id}`;
+  const subject = `PerfPilot regression on ${project.name}`;
+  const text = `${subject}\n\n${lines.join('\n')}\n\nFirst appeared: ${since}\n\n${suspects}\n\n${link}\n${projectLink}`;
+  const html = `<div style="font-family:Segoe UI,sans-serif;color:#18181b;line-height:1.5">
+    <p>${escapeHtml(subject)}</p>
+    <p>${escapeHtml(lines.join('\n')).replace(/\n/g, '<br>')}</p>
+    <p>First appeared: ${escapeHtml(since)}</p>
+    <p>${escapeHtml(suspects)}</p>
+    <p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p>
+    <p><a href="${escapeHtml(projectLink)}">${escapeHtml(projectLink)}</a></p>
+  </div>`;
+  const telegramHtml = `<b>${escapeTelegramHtml(subject)}</b>\n${escapeTelegramHtml(lines.join('\n'))}\nFirst appeared: ${escapeTelegramHtml(since)}\n${escapeTelegramHtml(suspects)}\n<a href="${escapeTelegramHtml(link)}">${escapeTelegramHtml(link)}</a>`;
+  return { kind: 'regression', subject, text, html, telegramHtml };
+}
+
+export function recoveryMessage(project: Project, jobId: string, origin: string): Outbound {
+  const link = jobLink(origin, jobId);
+  const subject = `PerfPilot recovery on ${project.name}`;
+  const text = `${subject}\n\nThe latest check is healthy and the incident is closed.\n\n${link}`;
+  const html = `<div style="font-family:Segoe UI,sans-serif;color:#18181b;line-height:1.5"><p>${escapeHtml(subject)}</p><p>The latest check is healthy and the incident is closed.</p><p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p></div>`;
+  const telegramHtml = `<b>${escapeTelegramHtml(subject)}</b>\nThe latest check is healthy and the incident is closed.\n<a href="${escapeTelegramHtml(link)}">${escapeTelegramHtml(link)}</a>`;
+  return { kind: 'recovery', subject, text, html, telegramHtml };
+}
+
+export function digestMessage(project: Project, bodyText: string, bodyHtml: string): Outbound {
+  const subject = `PerfPilot weekly digest for ${project.name}`;
+  const text = `${subject}\n\n${bodyText}`;
+  const html = `<div style="font-family:Segoe UI,sans-serif;color:#18181b;line-height:1.5"><p>${escapeHtml(subject)}</p>${bodyHtml}</div>`;
+  const telegramHtml = `<b>${escapeTelegramHtml(subject)}</b>\n${escapeTelegramHtml(bodyText)}`;
+  return { kind: 'digest', subject, text, html, telegramHtml };
+}
+
+async function deliver(env: NotifyEnv, stores: Stores, project: Project, jobId: string | null, message: Outbound, channels: Array<'email' | 'telegram'> = ['email', 'telegram']): Promise<{ email: ChannelResult; telegram: ChannelResult }> {
   const log = env.log ?? console.log;
   const fetchImpl = env.fetchImpl ?? fetch;
   const emailTo = (project.notifyEmail ?? '').trim() || env.notifyEmailDefault;
   const chat = (project.telegramChatId ?? '').trim() || env.telegramChatId;
 
   const email = await (async (): Promise<ChannelResult> => {
+    if (!channels.includes('email')) return { status: 'skipped', error: 'not requested' };
     if (!emailTo) return skip(env, 'email', 'recipient missing');
     if (!env.dryRun && !env.resendApiKey) return skip(env, 'email', 'RESEND_API_KEY missing');
     if (!env.dryRun && !env.emailFrom) return skip(env, 'email', 'EMAIL_FROM missing');
@@ -141,6 +176,7 @@ async function deliver(env: NotifyEnv, stores: Stores, project: Project, jobId: 
   })();
 
   const telegram = await (async (): Promise<ChannelResult> => {
+    if (!channels.includes('telegram')) return { status: 'skipped', error: 'not requested' };
     if (!chat) return skip(env, 'telegram', 'recipient missing');
     if (!env.dryRun && !env.telegramBotToken) return skip(env, 'telegram', 'TELEGRAM_BOT_TOKEN missing');
     if (env.dryRun) {
@@ -162,9 +198,9 @@ async function deliver(env: NotifyEnv, stores: Stores, project: Project, jobId: 
   return { email, telegram };
 }
 
-export async function sendNotification(env: NotifyEnv, stores: Stores, project: Project, jobId: string | null, message: Outbound): Promise<{ email: ChannelResult; telegram: ChannelResult }> {
+export async function sendNotification(env: NotifyEnv, stores: Stores, project: Project, jobId: string | null, message: Outbound, channels?: Array<'email' | 'telegram'>): Promise<{ email: ChannelResult; telegram: ChannelResult }> {
   try {
-    return await deliver(env, stores, project, jobId, message);
+    return await deliver(env, stores, project, jobId, message, channels);
   } catch (err) {
     const error = err instanceof Error ? 'notification failed' : 'notification failed';
     return { email: { status: 'failed', error }, telegram: { status: 'failed', error } };

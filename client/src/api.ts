@@ -11,7 +11,8 @@ export class ApiError extends Error {
 const base = import.meta.env.VITE_API_URL ?? '';
 
 export type ProjectMode = 'url' | 'repo';
-export type JobType = 'audit' | 'optimize';
+export type JobType = 'audit' | 'optimize' | 'monitor';
+export type MonitorStatus = 'ok' | 'learning' | 'breach' | 'regression';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface Project {
@@ -62,6 +63,31 @@ export interface ProjectSummary {
   lastSucceededOptimize: Job | null;
   lastPrUrl: string | null;
   jobCount: number;
+  monitor?: {
+    latestStatus: MonitorStatus | null;
+    baselineCount: number;
+    incidentOpen: boolean;
+    lastCheck: string | null;
+    minHistory: number;
+  };
+}
+
+export interface MeasurementRow {
+  id: number;
+  takenAt: string;
+  status: MonitorStatus;
+  medians: Record<string, number | null> | null;
+  compared: {
+    comparisons?: Array<{ key: string; label?: string; baselineMedian: number; candidateMedian: number; relativeChange: number; verdict: string; noise: number; breach?: boolean }>;
+    reference?: Record<string, number> | null;
+  } | null;
+}
+
+export interface IncidentRow {
+  id: string;
+  openedAt: string;
+  closedAt: string | null;
+  details: { suspects?: string; since?: string; commits?: Array<{ sha: string; message: string; author: string; date: string; url: string }> };
 }
 
 async function request<T>(path: string, init?: RequestInit, redirect401 = true): Promise<T> {
@@ -122,7 +148,7 @@ export function getProjectSummary(id: string): Promise<ProjectSummary> {
   return request(`/api/projects/${id}/summary`);
 }
 
-export function createJob(projectId: string, input: { type: JobType; runs: number; maxSteps: number; useAi: boolean }): Promise<Job> {
+export function createJob(projectId: string, input: { type: JobType; runs: number; maxSteps?: number; useAi?: boolean }): Promise<Job> {
   return request(`/api/projects/${projectId}/jobs`, { method: 'POST', body: JSON.stringify(input) });
 }
 
@@ -170,6 +196,14 @@ export interface ChannelResult {
 
 export function listNotifications(id: string): Promise<NotificationRow[]> {
   return request(`/api/jobs/${id}/notifications`);
+}
+
+export function listMeasurements(projectId: string): Promise<MeasurementRow[]> {
+  return request(`/api/projects/${projectId}/measurements?limit=40`);
+}
+
+export function listIncidents(projectId: string): Promise<IncidentRow[]> {
+  return request(`/api/projects/${projectId}/incidents`);
 }
 
 export function notifyTest(projectId: string): Promise<{ email: ChannelResult; telegram: ChannelResult }> {

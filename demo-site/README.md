@@ -12,3 +12,5 @@ Known problems (each one has a matching fix in PerfPilot's catalog):
 - A promo banner is injected above the content after load, which shifts the layout
 
 Run: `npm start` (port 4200). Regenerate assets: `npm run gen-assets`.
+
+`DEMO_REGRESSION=1` injects `/regression.js` as the first script in HTML responses. That file does about 120 ms of synchronous work and requests nothing else. Leave the variable unset for the normal demo.

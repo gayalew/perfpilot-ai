@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { createJob, deleteProject, getProject, listProjectJobs, notifyTest, type Job, type JobType, type Project } from '../api.ts';
 import { Badge } from '../components/Badge.tsx';
+import { MonitoringCard } from '../components/MonitoringCard.tsx';
 import { Button } from '../components/Button.tsx';
 import { Card } from '../components/Card.tsx';
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx';
@@ -94,6 +95,7 @@ export function ProjectPage() {
               <Button variant="danger" onClick={() => setConfirming(true)}>Delete</Button>
             </div>
           </div>
+          <MonitoringCard project={project} />
           <Card>
             <h2 className="text-lg font-medium">Run</h2>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">

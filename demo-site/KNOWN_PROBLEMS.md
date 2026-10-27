@@ -15,3 +15,9 @@ Answer key for the unfixed demo site. One line per problem: where it lives, and 
 - LCP image is lazy and not prioritized — `demo-site/public/index.html` — Take `loading="lazy"` off the hero image, add `<link rel="preload" as="image" href="/img/hero.png" fetchpriority="high">` in the head, and set `fetchpriority="high"` on the hero `<img>`.
 - Promo banner inserted after first paint — `demo-site/public/js/app.js` (`insertPromoBanner`) — Put the `.promo` banner in the initial HTML above the hero, with its height reserved, instead of inserting it from a double `requestAnimationFrame` after `DOMContentLoaded`.
 - One long startup task after load — `demo-site/public/js/app.js` (`runStartupWork`) — Yield between `runStartupChunk` calls instead of running all four chunks inside a single synchronous loop.
+
+## Demo controls
+
+These switches are for exercising PerfPilot. They are not problems for it to fix.
+
+- `DEMO_REGRESSION=1` — `demo-site/server.mjs` inserts `<script src="/regression.js"></script>` after `</title>` on HTML responses. `demo-site/public/regression.js` blocks the renderer for about 120 ms and requests nothing else. Default off.

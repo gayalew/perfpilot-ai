@@ -19,7 +19,7 @@ Usage:
   perfpilot-worker ab <baselineUrl> <candidateUrl> [--runs 5] [--profile mobile] [--out result.json]
   perfpilot-worker compare <baseline.json> <candidate.json> [--out result.json]
   perfpilot-worker diagnose <url> [--profile mobile] [--no-ai] [--out diagnosis.json]
-  perfpilot-worker optimize <repoPath> [--runs 4] [--final-runs 5] [--max-steps 12] [--no-ai] [--out-dir runs]
+  perfpilot-worker optimize <repoPath> [--runs 4] [--final-runs 5] [--max-steps 12] [--only fixId[,fixId]] [--no-ai] [--out-dir runs]
   perfpilot-worker report <ledger.json> --out report.pdf
 
 Profiles: ${Object.keys(PROFILES).join(', ')}
@@ -36,6 +36,7 @@ const { values: flags, positionals } = parseArgs({
     profile: { type: 'string', default: 'mobile' },
     out: { type: 'string' },
     json: { type: 'boolean', default: false },
+    only: { type: 'string' },
     'no-ai': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -144,11 +145,13 @@ async function main(): Promise<void> {
     const runId = new Date().toISOString().replace(/[:.]/g, '-');
     const runDir = path.resolve(outDir, runId);
     const started = Date.now();
+    const onlyFixes = flags.only?.split(',').map((item) => item.trim()).filter(Boolean);
     const result = await optimize({
       repoPath: args[0],
       runs,
       finalRuns,
       maxSteps,
+      onlyFixes,
       useAi: !flags['no-ai'],
       runDir,
       onEvent: (event) => {

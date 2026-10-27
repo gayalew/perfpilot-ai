@@ -2,7 +2,8 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { aggregate, measureUrl } from './measure.js';
+import { aggregate, measureUrl, values } from './measure.js';
+import { METRICS } from './metrics.js';
 import { extractFindings } from './diagnose.js';
 import { planFixes } from './gemini.js';
 import { runLighthouseOnce } from './lighthouse-runner.js';
@@ -13,10 +14,11 @@ import { git } from './repo.js';
 
 export interface JobSpec {
   jobId: string;
-  type: 'audit' | 'optimize';
+  type: 'audit' | 'optimize' | 'monitor';
   runs: number;
   maxSteps: number;
   useAi: boolean;
+  onlyFixes?: string[];
   runDir: string;
   project: {
     mode: 'url' | 'repo';
@@ -32,14 +34,16 @@ const NAME = /^[A-Za-z0-9_.-]+$/;
 
 export function parseSpec(line: string): JobSpec {
   const raw = JSON.parse(line) as Partial<JobSpec>;
-  if (raw.type !== 'audit' && raw.type !== 'optimize') throw new Error('type must be audit or optimize');
+  if (raw.type !== 'audit' && raw.type !== 'optimize' && raw.type !== 'monitor') throw new Error('type must be audit, optimize, or monitor');
   if (!raw.jobId || !raw.runDir || !raw.project) throw new Error('job spec is missing jobId, runDir, or project');
+  const onlyFixes = Array.isArray(raw.onlyFixes) ? raw.onlyFixes.map((item) => String(item)).filter(Boolean) : undefined;
   return {
     jobId: raw.jobId,
     type: raw.type,
-    runs: raw.runs ?? 4,
+    runs: raw.runs ?? (raw.type === 'monitor' ? 5 : 4),
     maxSteps: raw.maxSteps ?? 12,
     useAi: raw.useAi ?? true,
+    onlyFixes,
     runDir: raw.runDir,
     project: raw.project,
   };
@@ -146,6 +150,7 @@ async function runOptimize(spec: JobSpec): Promise<void> {
     finalRuns: 5,
     maxSteps: spec.maxSteps,
     useAi: spec.useAi,
+    onlyFixes: spec.onlyFixes,
     inplace: true,
     onEvent: (event) => emit(event.type, event),
   });
@@ -178,7 +183,24 @@ async function main(): Promise<void> {
   });
   const spec = parseSpec(line);
   if (spec.type === 'audit') await runAudit(spec);
+  else if (spec.type === 'monitor') await runMonitor(spec);
   else await runOptimize(spec);
+}
+
+async function runMonitor(spec: JobSpec): Promise<void> {
+  const url = spec.project.url;
+  if (!url) throw new Error('monitor requires a project URL. Set the URL field for this project.');
+  const runs = Math.min(10, Math.max(3, spec.runs || 5));
+  emit('job-start', { jobId: spec.jobId, type: 'monitor' });
+  const measured = await measureUrl({ url, runs, profile: 'mobile', onProgress: () => undefined });
+  const agg = aggregate(measured);
+  const samples: Record<string, number[]> = {};
+  const medians: Record<string, number | null> = {};
+  for (const info of METRICS) {
+    samples[info.key] = values(measured, info.key);
+    medians[info.key] = agg[info.key]?.median ?? null;
+  }
+  emit('job-end', { ok: true, measurement: { profile: 'mobile', samples, medians } });
 }
 
 const selfPath = path.resolve(fileURLToPath(import.meta.url));

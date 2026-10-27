@@ -1,4 +1,4 @@
-import type { Job, JobEvent, JobPatch, JobStatus, JobType, JobWithProject, Measurement, Notification, NotificationInput, Project, ProjectInput } from '../types.js';
+import type { Incident, Job, JobEvent, JobPatch, JobStatus, JobType, JobWithProject, Measurement, MeasurementStatus, Notification, NotificationInput, Project, ProjectInput } from '../types.js';
 
 export interface ProjectStore {
   list(): Promise<Project[]>;
@@ -24,8 +24,24 @@ export interface EventStore {
 }
 
 export interface MeasurementStore {
-  insert(input: { projectId: string; jobId?: string | null; profile: string; metrics: unknown }): Promise<Measurement>;
+  insert(input: {
+    projectId: string;
+    jobId?: string | null;
+    profile: string;
+    metrics: unknown;
+    status?: MeasurementStatus;
+    compared?: unknown;
+    samples?: unknown;
+    medians?: unknown;
+  }): Promise<Measurement>;
   listByProject(projectId: string): Promise<Measurement[]>;
+}
+
+export interface IncidentStore {
+  insert(input: { projectId: string; firstMeasurementId: number | null; lastMeasurementId: number | null; details: unknown }): Promise<Incident>;
+  update(id: string, patch: { closedAt?: string | null; lastMeasurementId?: number | null; alertSentAt?: string | null; recoverySentAt?: string | null; details?: unknown }): Promise<Incident | null>;
+  listByProject(projectId: string): Promise<Incident[]>;
+  openForProject(projectId: string): Promise<Incident | null>;
 }
 
 export interface NotificationStore {
@@ -38,5 +54,6 @@ export interface Stores {
   jobs: JobStore;
   events: EventStore;
   measurements: MeasurementStore;
+  incidents: IncidentStore;
   notifications: NotificationStore;
 }

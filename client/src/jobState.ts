@@ -80,6 +80,8 @@ export interface JobView {
   resultNote: string;
   baseline: MetricSnapshot | null;
   final: MetricSnapshot | null;
+  /** Final A/B comparison. Verdicts here are what cleared the noise floor. */
+  finalMetrics: MetricChange[];
   planSource: 'gemini' | 'heuristic' | null;
   planNote: string;
   plan: PlanStep[];
@@ -144,6 +146,7 @@ export function emptyJobState(): JobView {
     resultNote: '',
     baseline: null,
     final: null,
+    finalMetrics: [],
     planSource: null,
     planNote: '',
     plan: [],
@@ -269,6 +272,10 @@ export function applyLedger(state: JobView, ledger: unknown): JobView {
   const final = snapshotFromAggregate(ledger.final);
   if (baseline) next.baseline = baseline;
   if (final) next.final = final;
+  if (isRecord(ledger.finalComparison)) {
+    const compared = readMetrics(ledger.finalComparison);
+    if (compared.length) next.finalMetrics = compared;
+  }
   if (typeof ledger.aiSource === 'string' && ledger.aiSource) {
     const parsed = sourceFromAi(ledger.aiSource);
     if (!next.planSource) next.planSource = parsed.source;

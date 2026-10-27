@@ -143,6 +143,28 @@ export type OptimizeEvent =
   | { type: 'step-end'; order: number; fix: string; status: StepStatus; reason: string; attempts?: number; metricsSummary?: MetricSummaryRow[] }
   | { type: 'run-end'; kept: number; reverted: number; skipped: number; errored: number };
 
+/** Keeps plan steps whose fix id is listed. Findings for a listed id are added when the planner omitted them. */
+export function filterPlan(plan: Plan, findings: Finding[], onlyFixes?: string[]): Plan {
+  if (!onlyFixes || onlyFixes.length === 0) return plan;
+  const allow = new Set(onlyFixes);
+  const steps = plan.steps.filter((step) => allow.has(step.fix));
+  for (const id of onlyFixes) {
+    if (steps.some((step) => step.fix === id)) continue;
+    if (!(id in FIX_CATALOG)) continue;
+    const fix = id as FixId;
+    const finding = findings.find((item) => item.fix === fix);
+    if (!finding) continue;
+    steps.push({
+      fix,
+      auditId: finding.auditId,
+      rationale: finding.title,
+      expectedImpact: FIX_CATALOG[fix].summary,
+      order: steps.length + 1,
+    });
+  }
+  return { ...plan, steps: steps.map((step, index) => ({ ...step, order: index + 1 })) };
+}
+
 export function baselineEvent(aggregate: Aggregate, findingsCount: number): OptimizeEvent {
   const slim: Record<string, { median: number; n: number } | null> = {};
   for (const [key, summary] of Object.entries(aggregate)) {
@@ -211,6 +233,8 @@ export interface OptimizeOptions {
   useAi?: boolean;
   /** Use repoPath itself, keeping its git history, instead of copying into a fresh repo. */
   inplace?: boolean;
+  /** When set, the plan only keeps these fix ids. */
+  onlyFixes?: string[];
   runDir: string;
   onEvent?: (event: OptimizeEvent) => void;
   deps?: Partial<OptimizeDeps>;
@@ -444,9 +468,10 @@ export async function optimize(options: OptimizeOptions): Promise<OptimizeResult
     baselineAggregate = aggregate(measured);
     const lhr = await deps.runLighthouseOnce({ url: baseline.url, profile: 'mobile' });
     const findings = deps.extractFindings(lhr);
-    const plan: Plan = useAi
+    const planned: Plan = useAi
       ? await deps.planFixes(findings, { maxSteps })
       : await deps.planFixes(findings, { apiKey: '', maxSteps });
+    const plan = filterPlan(planned, findings, options.onlyFixes);
     aiSource = plan.note ? `${plan.source} (${plan.note})` : plan.source;
     await emit(options, eventsFile, baselineEvent(baselineAggregate, findings.length));
     await emit(options, eventsFile, planEvent(plan));
@@ -607,7 +632,10 @@ async function runStep(input: StepInput): Promise<LedgerStep> {
     | { kind: 'site'; files: string[]; message: string; note?: string };
 
   const finish = async (outcome: Outcome, attempts: number): Promise<LedgerStep> => {
-    if (outcome.kind === 'skipped') return blank('skipped', outcome.reason, { files: outcome.files, attempts });
+    if (outcome.kind === 'skipped') {
+      const reason = outcome.note ? `${outcome.reason} ${outcome.note}`.trim() : outcome.reason;
+      return blank('skipped', reason, { files: outcome.files, attempts });
+    }
     const gates = outcome.kind === 'site'
       ? [{ name: 'smoke' as const, passed: false, details: outcome.message.slice(0, 1500), ms: 0 }]
       : outcome.gates;
@@ -707,7 +735,10 @@ async function runStep(input: StepInput): Promise<LedgerStep> {
 
   try {
     const first = await attempt();
-    if (first.kind === 'skipped') return blank('skipped', first.reason, { files: first.files, attempts: 1 });
+    if (first.kind === 'skipped') {
+      const reason = first.note ? `${first.reason} ${first.note}`.trim() : first.reason;
+      return blank('skipped', reason, { files: first.files, attempts: 1 });
+    }
     const failed = first.kind === 'site' || first.gates.some((gate) => !gate.passed && gate.details !== 'not run');
     if (failed && applier.kind === 'ai') {
       await resetHard(input.workDir);

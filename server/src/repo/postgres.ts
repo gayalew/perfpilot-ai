@@ -1,5 +1,5 @@
 import pg from 'pg';
-import type { Job, JobEvent, JobPatch, JobStatus, JobType, JobWithProject, Measurement, Project, ProjectInput, ProjectMode } from '../types.js';
+import type { Incident, Job, JobEvent, JobPatch, JobStatus, JobType, JobWithProject, Measurement, MeasurementStatus, Project, ProjectInput, ProjectMode } from '../types.js';
 import type { Stores } from './types.js';
 
 const { Pool } = pg;
@@ -191,29 +191,59 @@ export function createPgStores(pool: pg.Pool): Stores {
     measurements: {
       async insert(input) {
         const result = await pool.query(
-          `INSERT INTO measurements (project_id, job_id, profile, metrics) VALUES ($1,$2,$3,$4::jsonb) RETURNING *`,
-          [input.projectId, input.jobId ?? null, input.profile, JSON.stringify(input.metrics ?? {})],
+          `INSERT INTO measurements (project_id, job_id, profile, metrics, status, compared, samples, medians)
+           VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7::jsonb,$8::jsonb) RETURNING *`,
+          [
+            input.projectId,
+            input.jobId ?? null,
+            input.profile,
+            JSON.stringify(input.metrics ?? {}),
+            input.status ?? 'ok',
+            input.compared == null ? null : JSON.stringify(input.compared),
+            input.samples == null ? null : JSON.stringify(input.samples),
+            input.medians == null ? null : JSON.stringify(input.medians),
+          ],
         );
-        const row = result.rows[0];
-        return {
-          id: Number(row.id),
-          projectId: String(row.project_id),
-          jobId: row.job_id ? String(row.job_id) : null,
-          takenAt: new Date(String(row.taken_at)).toISOString(),
-          profile: String(row.profile),
-          metrics: row.metrics,
-        } satisfies Measurement;
+        return mapMeasurement(result.rows[0]);
       },
       async listByProject(projectId) {
         const result = await pool.query('SELECT * FROM measurements WHERE project_id = $1 ORDER BY id', [projectId]);
-        return result.rows.map((row) => ({
-          id: Number(row.id),
-          projectId: String(row.project_id),
-          jobId: row.job_id ? String(row.job_id) : null,
-          takenAt: new Date(String(row.taken_at)).toISOString(),
-          profile: String(row.profile),
-          metrics: row.metrics,
-        }));
+        return result.rows.map((row) => mapMeasurement(row));
+      },
+    },
+    incidents: {
+      async insert(input) {
+        const result = await pool.query(
+          `INSERT INTO incidents (project_id, first_measurement_id, last_measurement_id, details)
+           VALUES ($1,$2,$3,$4::jsonb) RETURNING *`,
+          [input.projectId, input.firstMeasurementId, input.lastMeasurementId, JSON.stringify(input.details ?? {})],
+        );
+        return mapIncident(result.rows[0]);
+      },
+      async update(id, patch) {
+        const current = await pool.query('SELECT * FROM incidents WHERE id = $1', [id]);
+        if (!current.rows[0]) return null;
+        const row = current.rows[0] as Record<string, unknown>;
+        const result = await pool.query(
+          `UPDATE incidents SET closed_at = $2, last_measurement_id = $3, alert_sent_at = $4, recovery_sent_at = $5, details = $6::jsonb WHERE id = $1 RETURNING *`,
+          [
+            id,
+            patch.closedAt === undefined ? row.closed_at : patch.closedAt,
+            patch.lastMeasurementId === undefined ? row.last_measurement_id : patch.lastMeasurementId,
+            patch.alertSentAt === undefined ? row.alert_sent_at : patch.alertSentAt,
+            patch.recoverySentAt === undefined ? row.recovery_sent_at : patch.recoverySentAt,
+            JSON.stringify(patch.details === undefined ? row.details ?? {} : patch.details),
+          ],
+        );
+        return mapIncident(result.rows[0]);
+      },
+      async listByProject(projectId) {
+        const result = await pool.query('SELECT * FROM incidents WHERE project_id = $1 ORDER BY opened_at', [projectId]);
+        return result.rows.map((row) => mapIncident(row));
+      },
+      async openForProject(projectId) {
+        const result = await pool.query('SELECT * FROM incidents WHERE project_id = $1 AND closed_at IS NULL ORDER BY opened_at DESC LIMIT 1', [projectId]);
+        return result.rows[0] ? mapIncident(result.rows[0]) : null;
       },
     },
     notifications: {
@@ -229,6 +259,36 @@ export function createPgStores(pool: pg.Pool): Stores {
         return result.rows.map((row) => mapNotification(row));
       },
     },
+  };
+}
+
+function mapMeasurement(row: Record<string, unknown>): Measurement {
+  const status = String(row.status ?? 'ok') as MeasurementStatus;
+  return {
+    id: Number(row.id),
+    projectId: String(row.project_id),
+    jobId: row.job_id ? String(row.job_id) : null,
+    takenAt: new Date(String(row.taken_at)).toISOString(),
+    profile: String(row.profile),
+    metrics: row.metrics,
+    status,
+    compared: row.compared ?? null,
+    samples: row.samples ?? null,
+    medians: row.medians ?? null,
+  };
+}
+
+function mapIncident(row: Record<string, unknown>): Incident {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    openedAt: new Date(String(row.opened_at)).toISOString(),
+    closedAt: row.closed_at ? new Date(String(row.closed_at)).toISOString() : null,
+    firstMeasurementId: row.first_measurement_id == null ? null : Number(row.first_measurement_id),
+    lastMeasurementId: row.last_measurement_id == null ? null : Number(row.last_measurement_id),
+    alertSentAt: row.alert_sent_at ? new Date(String(row.alert_sent_at)).toISOString() : null,
+    recoverySentAt: row.recovery_sent_at ? new Date(String(row.recovery_sent_at)).toISOString() : null,
+    details: row.details ?? {},
   };
 }
 

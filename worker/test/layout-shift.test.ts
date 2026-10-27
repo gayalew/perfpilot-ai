@@ -6,7 +6,8 @@ import path from 'node:path';
 import { AiEditor } from '../src/ai-edit.js';
 import type { Finding } from '../src/diagnose.js';
 import { reserveSpace } from '../src/fixes/ai.js';
-import { parseLayoutShifts } from '../src/fixes/layout-shift.js';
+import { classifyLayoutShift, parseLayoutShifts, sitsAboveOrBeside } from '../src/fixes/layout-shift.js';
+import { appendSlotRule, insertBodySlot } from '../src/fixes/reserve-slot.js';
 import type { SiteConfig } from '../src/config.js';
 
 test('parseLayoutShifts sums shifts and groups culprit selectors', () => {
@@ -76,4 +77,48 @@ test('a repair attempt puts the new probe into the prompt', async () => {
   assert.match(sent, /Measured CLS 0\.080/);
   assert.match(sent, /\.promo/);
   assert.match(sent, /visual gate failed/);
+});
+
+test('classifyLayoutShift separates late causes from shifted victims', () => {
+  const banner = {
+    selector: 'div.promo',
+    parentSelector: 'html > body',
+    index: 0,
+    tag: 'div',
+    classList: ['promo'],
+    outerHtml: '<div class="promo">',
+    top: 0,
+    height: 156,
+    position: 'static',
+    insertedAt: 1000,
+  };
+  const below = { ...banner, selector: 'div.late', parentSelector: 'section', index: 2, top: 2400, height: 40, insertedAt: 1000 };
+  const tooEarly = { ...banner, selector: 'div.old', insertedAt: 100 };
+  const shifts = [{
+    startTime: 1200,
+    value: 0.2,
+    hadRecentInput: false,
+    sources: [{ selector: 'header.top', previousRect: { top: 0, height: 48, width: 400 }, currentRect: { top: 156, height: 48, width: 400 } }],
+  }, {
+    startTime: 1200,
+    value: 0.9,
+    hadRecentInput: true,
+    sources: [{ selector: 'main', previousRect: { top: 0, height: 10 }, currentRect: { top: 400, height: 10 } }],
+  }];
+  const report = classifyLayoutShift([banner, below, tooEarly, { selector: '' }], shifts);
+  assert.deepEqual(report.causes.map((item) => item.selector), ['div.promo']);
+  assert.deepEqual(report.victims.map((item) => item.selector), ['header.top']);
+  assert.equal(sitsAboveOrBeside(banner, { top: 156, height: 48 }), true);
+  assert.equal(sitsAboveOrBeside(below, { top: 156, height: 48 }), false);
+});
+
+test('a body-first banner gets a slot and an out-of-flow rule', () => {
+  const html = '<!doctype html><html><head><link rel="stylesheet" href="/css/base.css"></head><body>\n<header>Top</header></body></html>\n';
+  const next = insertBodySlot(html, 156);
+  assert.match(next, /<body><div class="pp-slot" aria-hidden="true" style="height:156px"><\/div>/);
+  assert.match(next, /<header>Top<\/header>/);
+  assert.equal(insertBodySlot(next, 156), next);
+  const css = appendSlotRule('body { margin: 0; }\n', 'html > body > div.promo', 156);
+  assert.match(css, /html > body > div\.promo \{ position:absolute; top:0; left:0; right:0; height:156px; \}/);
+  assert.equal(appendSlotRule(css, 'html > body > div.promo', 156), css);
 });

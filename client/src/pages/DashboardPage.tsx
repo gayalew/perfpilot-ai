@@ -8,6 +8,7 @@ import { GithubLink } from '../components/GithubLink.tsx';
 import { LoadGate } from '../components/QueryState.tsx';
 import { StatusIcon } from '../components/StatusIcon.tsx';
 import { formatDuration, formatRelativeTime } from '../format.ts';
+import { monitorStatusLabel } from '../monitor.ts';
 
 interface DashboardData {
   projects: Project[];
@@ -65,7 +66,19 @@ export function DashboardPage() {
                   <Card key={project.id} testId="project-card">
                     <div className="flex items-start justify-between gap-3">
                       <h2 className="text-lg font-medium">{project.name}</h2>
-                      <Badge tone="accent">{project.mode === 'repo' ? 'Repo' : 'URL'}</Badge>
+                      <span className="flex flex-wrap justify-end gap-2">
+                        <Badge tone="accent">{project.mode === 'repo' ? 'Repo' : 'URL'}</Badge>
+                        {summary?.monitor && (
+                          <Badge tone={summary.monitor.incidentOpen ? 'bad' : summary.monitor.latestStatus === 'breach' ? 'warn' : summary.monitor.latestStatus === 'ok' ? 'good' : 'neutral'}>
+                            {monitorStatusLabel({
+                              minHistory: summary.monitor.minHistory,
+                              baselineCount: summary.monitor.baselineCount,
+                              latestStatus: summary.monitor.latestStatus,
+                              incidentOpen: summary.monitor.incidentOpen,
+                            })}
+                          </Badge>
+                        )}
+                      </span>
                     </div>
                     <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-300">
                       {last ? (

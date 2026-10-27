@@ -10,6 +10,7 @@ import type { EventBus } from './events.js';
 import type { Executor } from './executor.js';
 import type { Stores } from './repo/types.js';
 import type { Project, ProjectInput } from './types.js';
+import { cronValid } from './monitor/due.js';
 import type { ChannelResult } from './notify/dispatch.js';
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
@@ -60,16 +61,22 @@ function refineProject(value: z.infer<typeof projectObject>, ctx: z.RefinementCt
   if (value.repoOwner && !NAME.test(value.repoOwner)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['repoOwner'], message: 'repo_owner is invalid' });
   if (value.repoName && !NAME.test(value.repoName)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['repoName'], message: 'repo_name is invalid' });
   if (value.rootDir !== undefined && badRoot(value.rootDir)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rootDir'], message: 'root_dir must stay inside the repo' });
+  if (value.scheduleCron && !cronValid(value.scheduleCron)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['scheduleCron'], message: 'schedule_cron is invalid' });
 }
 
 const projectSchema = projectObject.superRefine((value, ctx) => refineProject(value, ctx, false));
 const patchSchema = projectObject.partial().superRefine((value, ctx) => refineProject(value as z.infer<typeof projectObject>, ctx, true));
 
 const jobSchema = z.object({
-  type: z.enum(['audit', 'optimize']),
-  runs: z.number().int().min(4).max(10).optional(),
+  type: z.enum(['audit', 'optimize', 'monitor']),
+  runs: z.number().int().optional(),
   maxSteps: z.number().int().min(1).max(12).optional(),
   useAi: z.boolean().optional(),
+  onlyFixes: z.array(z.string().min(1)).max(12).optional(),
+}).superRefine((value, ctx) => {
+  if (value.runs === undefined) return;
+  const min = value.type === 'monitor' ? 3 : 4;
+  if (value.runs < min || value.runs > 10) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['runs'], message: `runs must be from ${min} to 10` });
 });
 
 export interface AppDeps {
@@ -79,6 +86,10 @@ export interface AppDeps {
   executor: Executor;
   reportFile?: (jobId: string) => string;
   notifyTest?: (project: Project) => Promise<{ email: ChannelResult; telegram: ChannelResult }>;
+  scheduler?: { sync(project: Project): void; remove(projectId: string): void };
+  runDue?: () => Promise<string[]>;
+  jobSecret?: string;
+  monitorMinHistory?: number;
 }
 
 function cookieFlags(config: AppDeps['config']): { sameSite: 'lax' | 'none'; secure: boolean } {
@@ -110,6 +121,7 @@ function toInput(value: z.infer<typeof projectObject>): ProjectInput {
 export function createApp(deps: AppDeps): express.Express {
   const { config, stores, bus, executor } = deps;
   const limiter = new LoginLimiter();
+  const dueLimiter = new LoginLimiter(30, 60_000);
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
@@ -143,6 +155,22 @@ export function createApp(deps: AppDeps): express.Express {
     res.json({ ok: true });
   });
 
+  app.post('/api/internal/run-due', asyncRoute(async (req, res) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    if (dueLimiter.blocked(ip)) {
+      res.status(429).json({ error: 'too many attempts' });
+      return;
+    }
+    dueLimiter.fail(ip);
+    const secret = req.header('x-job-secret') ?? '';
+    if (!deps.jobSecret || !passwordsMatch(secret, deps.jobSecret)) {
+      res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+    const enqueued = deps.runDue ? await deps.runDue() : [];
+    res.json({ enqueued });
+  }));
+
   app.use('/api', (req, res, next) => {
     if (req.path === '/health' || req.path === '/login') return next();
     const token = readCookie(req.header('cookie'), SESSION_COOKIE);
@@ -170,6 +198,7 @@ export function createApp(deps: AppDeps): express.Express {
   app.post('/api/projects', asyncRoute(async (req, res) => {
     const parsed = projectSchema.parse(normalizeProject(req.body));
     const project = await stores.projects.create(toInput(parsed));
+    deps.scheduler?.sync(project);
     res.status(201).json(project);
   }));
 
@@ -190,11 +219,13 @@ export function createApp(deps: AppDeps): express.Express {
     }
     const parsed = patchSchema.parse(normalizeProject({ ...existing, ...((req.body ?? {}) as object) }));
     const project = await stores.projects.update(existing.id, toInput({ ...existing, ...parsed, name: parsed.name ?? existing.name, mode: parsed.mode ?? existing.mode }));
+    if (project) deps.scheduler?.sync(project);
     res.json(project);
   }));
 
   app.delete('/api/projects/:id', asyncRoute(async (req, res) => {
     const removed = await stores.projects.delete(String(req.params.id));
+    if (removed) deps.scheduler?.remove(String(req.params.id));
     if (!removed) {
       res.status(404).json({ error: 'project not found' });
       return;
@@ -216,10 +247,39 @@ export function createApp(deps: AppDeps): express.Express {
     const job = await stores.jobs.create({
       projectId: project.id,
       type: parsed.type,
-      params: { runs: parsed.runs ?? 4, maxSteps: parsed.maxSteps ?? 12, useAi: parsed.useAi ?? true },
+      params: {
+        runs: parsed.runs ?? (parsed.type === 'monitor' ? 5 : 4),
+        maxSteps: parsed.maxSteps ?? 12,
+        useAi: parsed.useAi ?? true,
+        ...(parsed.onlyFixes ? { onlyFixes: parsed.onlyFixes } : {}),
+      },
     });
     await executor.start(job);
     res.status(202).json({ id: job.id });
+  }));
+
+  app.get('/api/projects/:id/measurements', asyncRoute(async (req, res) => {
+    const project = await stores.projects.get(String(req.params.id));
+    if (!project) {
+      res.status(404).json({ error: 'project not found' });
+      return;
+    }
+    const parsed = z.coerce.number().int().min(1).max(100).default(40).safeParse(req.query.limit ?? 40);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'limit must be between 1 and 100' });
+      return;
+    }
+    const rows = (await stores.measurements.listByProject(project.id)).filter((row) => row.samples);
+    res.json(rows.slice(-parsed.data));
+  }));
+
+  app.get('/api/projects/:id/incidents', asyncRoute(async (req, res) => {
+    const project = await stores.projects.get(String(req.params.id));
+    if (!project) {
+      res.status(404).json({ error: 'project not found' });
+      return;
+    }
+    res.json(await stores.incidents.listByProject(project.id));
   }));
 
   app.get('/api/projects/:id/jobs', asyncRoute(async (req, res) => {
@@ -236,7 +296,22 @@ export function createApp(deps: AppDeps): express.Express {
     const lastJob = jobs.at(-1) ?? null;
     const lastSucceededOptimize = [...jobs].reverse().find((job) => job.type === 'optimize' && job.status === 'succeeded') ?? null;
     const lastPrUrl = [...jobs].reverse().find((job) => job.prUrl)?.prUrl ?? null;
-    res.json({ lastJob, lastSucceededOptimize, lastPrUrl, jobCount: jobs.length });
+    const checks = (await stores.measurements.listByProject(project.id)).filter((row) => row.samples);
+    const incidents = await stores.incidents.listByProject(project.id);
+    const latest = checks.at(-1) ?? null;
+    res.json({
+      lastJob,
+      lastSucceededOptimize,
+      lastPrUrl,
+      jobCount: jobs.length,
+      monitor: {
+        latestStatus: latest?.status ?? null,
+        baselineCount: checks.filter((row) => row.status === 'ok' || row.status === 'learning').length,
+        incidentOpen: incidents.some((row) => !row.closedAt),
+        lastCheck: latest?.takenAt ?? null,
+        minHistory: deps.monitorMinHistory ?? 3,
+      },
+    });
   }));
 
   app.get('/api/jobs', asyncRoute(async (req, res) => {

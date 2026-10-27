@@ -1,0 +1,23 @@
+name: monitor
+
+on:
+  schedule:
+    # Every six hours. Render's free tier sleeps; the curl retries below wait for it to wake.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  run-due:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the server and enqueue due monitor jobs
+        run: |
+          # Render free tier sleeps the web service. --retry-all-errors with a delay
+          # gives the instance time to wake before the call is treated as a failure.
+          # Required secrets:
+          #   PERFPILOT_URL  public origin of the PerfPilot server, with no path
+          #   JOB_SECRET     same value as the server JOB_SECRET environment variable
+          curl -fsS -X POST \
+            --retry 6 --retry-delay 20 --retry-all-errors --max-time 60 \
+            -H "x-job-secret: ${{ secrets.JOB_SECRET }}" \
+            "${{ secrets.PERFPILOT_URL }}/api/internal/run-due"

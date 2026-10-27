@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ApiError, cancelJob, getJob, getLedger, getProject, listNotifications, reportPdfUrl, summaryMarkdownUrl, type Job, type NotificationRow } from '../api.ts';
 import { watchJob } from '../events.ts';
-import { formatDuration, formatMetric, formatPercentChange, formatRelativeTime, safeGithubUrl } from '../format.ts';
-import { applyLedger, emptyJobState, reduceJob, type Experiment, type GateName, type JobView, type MetricSnapshot } from '../jobState.ts';
+import { formatDuration, formatMetric, formatPercentChange, formatRelativeTime, formatRunTitle, isQuietChange, resultHeadline, safeGithubUrl } from '../format.ts';
+import type { MonitorStatus } from '../api.ts';
+import { applyLedger, emptyJobState, reduceJob, type Experiment, type GateName, type JobView, type MetricChange, type MetricSnapshot } from '../jobState.ts';
 import { Badge } from '../components/Badge.tsx';
 import { Button } from '../components/Button.tsx';
 import { Card } from '../components/Card.tsx';
@@ -28,6 +29,38 @@ const GATE_LABEL: Record<GateName, string> = { build: 'Build', smoke: 'Smoke', v
 
 function metricKey(key: keyof MetricSnapshot): string {
   return key === 'weight' ? 'weight' : key;
+}
+
+function headlineRows(view: JobView): Array<{ key: string; before: number; after: number; verdict?: string }> {
+  if (!view.baseline || !view.final) return [];
+  return RESULT_ROWS.flatMap(([key]) => {
+    const before = view.baseline?.[key];
+    const after = view.final?.[key];
+    if (before == null || after == null) return [];
+    const comparisonKey = key === 'weight' ? 'totalBytes' : key;
+    return [{ key: comparisonKey, before, after, verdict: verdictFor(view.finalMetrics, key) }];
+  });
+}
+
+function verdictFor(metrics: MetricChange[], key: keyof MetricSnapshot): string {
+  const wanted = key === 'weight' ? 'totalBytes' : key;
+  const found = metrics.find((item) => item.key === wanted);
+  if (found?.verdict === 'improved' || found?.verdict === 'regressed' || found?.verdict === 'unchanged') return found.verdict;
+  return 'unchanged';
+}
+
+interface MonitorResult {
+  status?: MonitorStatus;
+  comparisons?: Array<{ key: string; label: string; baselineMedian: number; candidateMedian: number; relativeChange: number; verdict: string; breach?: boolean }>;
+  suspects?: Array<{ sha: string; message: string; author: string; date: string; url: string }>;
+  suspectText?: string;
+}
+
+function monitorOf(job: Job | null): MonitorResult | null {
+  const result = job?.result;
+  if (!result || typeof result !== 'object' || !('monitor' in result)) return null;
+  const monitor = (result as { monitor?: MonitorResult }).monitor;
+  return monitor ?? null;
 }
 
 function GateMark({ state }: { state: Experiment['gates'][number]['state'] }) {
@@ -206,6 +239,18 @@ export function JobPage() {
     node?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [view.experiments]);
 
+  const monitor = monitorOf(job);
+  useEffect(() => {
+    if (job?.type !== 'monitor' || job.status !== 'succeeded' || monitor) return;
+    const timer = window.setInterval(() => {
+      getJob(id).then((next) => {
+        setJob(next);
+        listNotifications(id).then(setNotices).catch(() => {});
+      }).catch(() => {});
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [id, job?.type, job?.status, monitor]);
+
   const elapsed = job?.startedAt ? (job.finishedAt ? Date.parse(job.finishedAt) : now) - Date.parse(job.startedAt) : null;
   const runningOrder = [...view.experiments].reverse().find((item) => item.status === 'running')?.order;
   const pr = safeGithubUrl(view.prUrl || job?.prUrl);
@@ -216,8 +261,8 @@ export function JobPage() {
         <div className="space-y-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-sm text-zinc-500">{projectName || 'Project'} · <span className="capitalize">{job.type}</span></p>
-              <h1 className="text-2xl font-medium tracking-tight">Run</h1>
+              <p className="text-sm text-zinc-500">{projectName || 'Project'}</p>
+              <h1 className="text-2xl font-medium tracking-tight">{formatRunTitle(job.type, job.startedAt)}</h1>
               <p className="mt-2" aria-live="polite" data-testid="job-status">
                 <span className="inline-flex flex-wrap items-center gap-3">
                   <StatusIcon status={view.finished && view.ok === false ? 'failed' : job.status} />
@@ -228,6 +273,59 @@ export function JobPage() {
             </div>
             {(job.status === 'queued' || job.status === 'running') && <Button variant="danger" onClick={() => setConfirming(true)}>Cancel</Button>}
           </div>
+
+          {job.type === 'monitor' && (
+            <Card testId="monitor-result">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-lg font-medium">Check</h2>
+                <Badge tone={monitor?.status === 'regression' ? 'bad' : monitor?.status === 'breach' ? 'warn' : monitor?.status === 'ok' ? 'good' : 'neutral'}>{monitor?.status ?? job.status}</Badge>
+              </div>
+              {monitor?.comparisons && monitor.comparisons.length > 0 ? (
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full min-w-[32rem] text-left text-sm">
+                    <thead className="text-xs uppercase tracking-wide text-zinc-500">
+                      <tr>
+                        <th className="py-2 pr-3 font-medium">Metric</th>
+                        <th className="py-2 pr-3 font-medium">Reference</th>
+                        <th className="py-2 pr-3 font-medium">Now</th>
+                        <th className="py-2 pr-3 font-medium">Change</th>
+                        <th className="py-2 font-medium">Result</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monitor.comparisons.map((row) => {
+                        const quiet = row.verdict === 'unchanged';
+                        const tone = row.breach ? 'text-red-700 dark:text-red-300' : row.verdict === 'regressed' ? 'text-amber-700 dark:text-amber-300' : quiet ? 'text-zinc-400' : '';
+                        return (
+                          <tr key={row.key} className={tone}>
+                            <td className="py-2 pr-3">{row.label}</td>
+                            <td className="py-2 pr-3 tabular-nums">{formatMetric(row.key, row.baselineMedian)}</td>
+                            <td className="py-2 pr-3 tabular-nums">{formatMetric(row.key, row.candidateMedian)}</td>
+                            <td className="py-2 pr-3 tabular-nums">{formatPercentChange(row.baselineMedian, row.candidateMedian)}</td>
+                            <td className="py-2">{row.verdict}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-zinc-500">{job.status === 'succeeded' ? 'Waiting for the comparison.' : 'The check has not finished.'}</p>
+              )}
+              <div className="mt-4 text-sm">
+                <h3 className="font-medium">Suspects</h3>
+                <p className="mt-1 text-zinc-600 dark:text-zinc-300">{monitor?.suspectText || 'No suspects recorded.'}</p>
+                {monitor?.suspects && monitor.suspects.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {monitor.suspects.map((commit) => {
+                      const href = safeGithubUrl(commit.url);
+                      return <li key={commit.sha}>{href ? <a className="text-indigo-700 underline dark:text-indigo-300" href={href}>{commit.sha}</a> : <span>{commit.sha}</span>} {commit.message}</li>;
+                    })}
+                  </ul>
+                )}
+              </div>
+            </Card>
+          )}
 
           {job.type === 'audit' && !view.baseline && (job.status === 'queued' || job.status === 'running') && (
             <Card>
@@ -299,33 +397,47 @@ export function JobPage() {
               )}
               {view.resultNote && <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{view.resultNote}</p>}
               {view.baseline && view.final && (
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full min-w-[32rem] text-left text-sm">
-                    <thead className="text-xs uppercase tracking-wide text-zinc-500">
-                      <tr>
-                        <th className="py-2 pr-3 font-medium">Metric</th>
-                        <th className="py-2 pr-3 font-medium">Before</th>
-                        <th className="py-2 pr-3 font-medium">After</th>
-                        <th className="py-2 pr-3 font-medium">Change</th>
-                        <th className="py-2 font-medium"> </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {RESULT_ROWS.map(([key, label]) => {
-                        const before = view.baseline?.[key] ?? null;
-                        const after = view.final?.[key] ?? null;
-                        return (
-                          <tr key={key} className="border-t border-zinc-100 dark:border-zinc-800">
-                            <td className="py-2 pr-3">{label}</td>
-                            <td className="py-2 pr-3 tabular-nums">{formatMetric(metricKey(key), before)}</td>
-                            <td className="py-2 pr-3 tabular-nums">{formatMetric(metricKey(key), after)}</td>
-                            <td className="py-2 pr-3 tabular-nums">{before == null || after == null ? 'n/a' : formatPercentChange(before, after)}</td>
-                            <td className="py-2">{before != null && after != null ? <MetricBar before={before} after={after} /> : null}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                <div className="mt-4">
+                  <p className="text-sm font-medium" data-testid="result-headline">{resultHeadline(headlineRows(view))}</p>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
+                    <span className="inline-flex items-center gap-1.5"><span className="inline-block h-1.5 w-6 rounded-full bg-zinc-300 dark:bg-zinc-600" /> Before</span>
+                    <span className="inline-flex items-center gap-1.5"><span className="inline-block h-1.5 w-6 rounded-full bg-emerald-600" /> After, improved</span>
+                    <span className="inline-flex items-center gap-1.5"><span className="inline-block h-1.5 w-6 rounded-full bg-slate-400" /> After, unchanged</span>
+                    <span className="inline-flex items-center gap-1.5"><span className="inline-block h-1.5 w-6 rounded-full bg-amber-500" /> After, regressed</span>
+                  </div>
+                  <div className="mt-2 overflow-x-auto">
+                    <table className="w-full min-w-[40rem] text-left text-sm">
+                      <thead className="text-xs uppercase tracking-wide text-zinc-500">
+                        <tr>
+                          <th className="py-2 pr-3 font-medium">Metric</th>
+                          <th className="py-2 pr-3 font-medium">Before</th>
+                          <th className="py-2 pr-3 font-medium">After</th>
+                          <th className="py-2 pr-3 font-medium">Change</th>
+                          <th className="py-2 pr-3 font-medium"> </th>
+                          <th className="py-2 font-medium">Result</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {RESULT_ROWS.map(([key, label]) => {
+                          const before = view.baseline?.[key] ?? null;
+                          const after = view.final?.[key] ?? null;
+                          const verdict = verdictFor(view.finalMetrics, key);
+                          const quiet = isQuietChange(before, after, verdict);
+                          return (
+                            <tr key={key} className={`border-t border-zinc-100 dark:border-zinc-800 ${quiet ? 'text-zinc-500' : ''}`}>
+                              <td className="py-2 pr-3">{label}</td>
+                              <td className="py-2 pr-3 tabular-nums">{formatMetric(metricKey(key), before)}</td>
+                              <td className="py-2 pr-3 tabular-nums">{formatMetric(metricKey(key), after)}</td>
+                              <td className="py-2 pr-3 tabular-nums">{before == null || after == null ? 'n/a' : formatPercentChange(before, after)}</td>
+                              <td className="py-2 pr-3">{before != null && after != null ? <MetricBar before={before} after={after} verdict={verdict} /> : null}</td>
+                              <td className="py-2">{verdict}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="mt-2 text-xs text-zinc-500">Higher is better for score. Lower is better for LCP, FCP, TBT, CLS, Speed Index, page weight, and requests.</p>
                 </div>
               )}
               <div className="mt-4 flex flex-wrap gap-2">

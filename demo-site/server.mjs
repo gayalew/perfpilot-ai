@@ -21,7 +21,10 @@ http
       if (path.endsWith('/')) path += 'index.html';
       const file = normalize(join(root, path));
       if (!file.startsWith(root)) throw new Error('outside root');
-      const body = await readFile(file);
+      let body = await readFile(file);
+      if (process.env.DEMO_REGRESSION === '1' && extname(file) === '.html') {
+        body = Buffer.from(body.toString('utf8').replace('</title>', '</title><script src="/regression.js"></script>'));
+      }
       res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream' });
       res.end(body);
     } catch {

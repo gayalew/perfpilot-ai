@@ -29,6 +29,13 @@ const ledger = {
   aiSource: 'gemini',
   baseline: agg(38, 30800, 543, 0.19, 8.13 * 1024 * 1024),
   final: agg(65, 4770, 31, 0.19, 799 * 1024),
+  finalComparison: {
+    metrics: [
+      metric('lcp', 'LCP', 30800, 4770, 'improved'),
+      metric('tbt', 'TBT', 543, 31, 'improved'),
+      metric('cls', 'CLS', 0.19, 0.19, 'unchanged'),
+    ],
+  },
   steps: [
     { order: 1, fix: 'lazy-load-images', title: 'Lazy-load below-the-fold images', status: 'kept', reason: 'Improved: TBT', attempts: 1, gates: [{ name: 'performance', passed: true, comparison: { metrics: [metric('tbt', 'TBT', 543, 200, 'improved')] } }] },
     { order: 2, fix: 'optimize-images', title: 'Resize and recompress images (WebP/AVIF)', status: 'kept', reason: 'Improved: page weight', attempts: 1, gates: [{ name: 'performance', passed: true, comparison: { metrics: [metric('totalBytes', 'page weight', 8000000, 800000, 'improved')] } }] },
@@ -72,6 +79,7 @@ describe('job reducer', () => {
     expect(view.experiments[3]?.gates.every((gate) => gate.state === 'not-run')).toBe(true);
     expect(view.baseline?.score).toBe(38);
     expect(view.final?.lcp).toBe(4770);
+    expect(view.finalMetrics.map((row) => `${row.key}:${row.verdict}`)).toEqual(['lcp:improved', 'tbt:improved', 'cls:unchanged']);
     expect(view.planSource).toBe('gemini');
     expect(view.plan).toHaveLength(4);
     expect(view.prUrl).toBe('https://github.com/acme/demo/pull/1');

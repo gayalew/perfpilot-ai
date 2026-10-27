@@ -64,7 +64,72 @@ export function safeGithubUrl(url: string | null | undefined): string | null {
   return url;
 }
 
-export function estimateMinutes(type: 'audit' | 'optimize', runs: number, maxSteps: number): number {
-  if (type === 'audit') return Math.max(2, Math.round(runs * 0.8));
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const HEADLINE_LABEL: Record<string, string> = {
+  score: 'Score',
+  lcp: 'LCP',
+  fcp: 'FCP',
+  tbt: 'TBT',
+  cls: 'CLS',
+  speedIndex: 'Speed Index',
+  totalBytes: 'page weight',
+  weight: 'page weight',
+  requests: 'requests',
+};
+
+const HIGHER_IS_BETTER = new Set(['score']);
+
+export interface HeadlineInput {
+  key: string;
+  before: number;
+  after: number;
+  verdict?: string;
+}
+
+/** "Optimize run, Oct 27, 10:14". The clock is the viewer's local time. */
+export function formatRunTitle(type: string, startedAt: string | null | undefined): string {
+  const name = type === 'optimize' ? 'Optimize' : type === 'audit' ? 'Audit' : type.charAt(0).toUpperCase() + type.slice(1);
+  const title = `${name} run`;
+  if (!startedAt) return title;
+  const date = new Date(startedAt);
+  if (!Number.isFinite(date.getTime())) return title;
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  return `${title}, ${MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getHours()}:${minute}`;
+}
+
+function wholePercent(relative: number): string {
+  const rounded = Math.round(relative * 100);
+  const sign = rounded > 0 ? '+' : '';
+  return `${sign}${rounded}%`;
+}
+
+/**
+ * The largest three metrics whose comparison verdict is improved.
+ * Ranked by the size of the improvement in the metric's own direction.
+ */
+export function resultHeadline(metrics: HeadlineInput[]): string {
+  const ranked = metrics.flatMap((metric) => {
+    if (metric.verdict !== 'improved') return [];
+    if (!Number.isFinite(metric.before) || !Number.isFinite(metric.after) || metric.before === 0) return [];
+    const relative = (metric.after - metric.before) / Math.abs(metric.before);
+    const gain = HIGHER_IS_BETTER.has(metric.key) ? relative : -relative;
+    if (!(gain > 0)) return [];
+    const label = HEADLINE_LABEL[metric.key] ?? metric.key;
+    return [{ label, relative, gain }];
+  }).sort((a, b) => b.gain - a.gain).slice(0, 3);
+  if (ranked.length === 0) return 'No proven improvement';
+  return ranked.map((item) => `${item.label} ${wholePercent(item.relative)}`).join(', ');
+}
+
+/** A row that neither moved by 0.5% nor earned a comparison verdict. */
+export function isQuietChange(before: number | null, after: number | null, verdict: string): boolean {
+  if (verdict !== 'unchanged') return false;
+  if (before == null || after == null || !Number.isFinite(before) || !Number.isFinite(after) || before === 0) return false;
+  return Math.abs((after - before) / Math.abs(before)) * 100 < 0.5;
+}
+
+export function estimateMinutes(type: 'audit' | 'optimize' | 'monitor', runs: number, maxSteps: number): number {
+  if (type === 'audit' || type === 'monitor') return Math.max(2, Math.round(runs * 0.8));
   return Math.max(8, Math.round(4 + runs * 1.5 + maxSteps * 1.2));
 }

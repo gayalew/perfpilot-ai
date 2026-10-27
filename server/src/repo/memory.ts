@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Job, JobEvent, JobPatch, JobStatus, JobWithProject, Measurement, Notification, Project, ProjectInput } from '../types.js';
-import type { EventStore, JobStore, MeasurementStore, NotificationStore, ProjectStore, Stores } from './types.js';
+import type { Incident, Job, JobEvent, JobPatch, JobStatus, JobWithProject, Measurement, Notification, Project, ProjectInput } from '../types.js';
+import type { EventStore, IncidentStore, JobStore, MeasurementStore, NotificationStore, ProjectStore, Stores } from './types.js';
 
 function now(): string {
   return new Date().toISOString();
@@ -28,6 +28,7 @@ export function createMemoryStores(): Stores {
   const jobs: Job[] = [];
   const events: JobEvent[] = [];
   const measurements: Measurement[] = [];
+  const incidents: Incident[] = [];
   const notifications: Notification[] = [];
   let notificationId = 1;
   let eventId = 0;
@@ -142,12 +143,51 @@ export function createMemoryStores(): Stores {
         takenAt: now(),
         profile: input.profile,
         metrics: input.metrics,
+        status: input.status ?? 'ok',
+        compared: input.compared ?? null,
+        samples: input.samples ?? null,
+        medians: input.medians ?? null,
       };
       measurements.push(row);
       return row;
     },
     async listByProject(projectId) {
       return measurements.filter((row) => row.projectId === projectId);
+    },
+  };
+
+  const incidentStore: IncidentStore = {
+    async insert(input) {
+      const row: Incident = {
+        id: randomUUID(),
+        projectId: input.projectId,
+        openedAt: now(),
+        closedAt: null,
+        firstMeasurementId: input.firstMeasurementId,
+        lastMeasurementId: input.lastMeasurementId,
+        alertSentAt: null,
+        recoverySentAt: null,
+        details: input.details,
+      };
+      incidents.push(row);
+      return { ...row };
+    },
+    async update(id, patch) {
+      const row = incidents.find((item) => item.id === id);
+      if (!row) return null;
+      if (patch.closedAt !== undefined) row.closedAt = patch.closedAt;
+      if (patch.lastMeasurementId !== undefined) row.lastMeasurementId = patch.lastMeasurementId;
+      if (patch.alertSentAt !== undefined) row.alertSentAt = patch.alertSentAt;
+      if (patch.recoverySentAt !== undefined) row.recoverySentAt = patch.recoverySentAt;
+      if (patch.details !== undefined) row.details = patch.details;
+      return { ...row };
+    },
+    async listByProject(projectId) {
+      return incidents.filter((item) => item.projectId === projectId).map((item) => ({ ...item }));
+    },
+    async openForProject(projectId) {
+      const row = incidents.find((item) => item.projectId === projectId && !item.closedAt);
+      return row ? { ...row } : null;
     },
   };
 
@@ -171,5 +211,5 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  return { projects: projectStore, jobs: jobStore, events: eventStore, measurements: measurementStore, notifications: notificationStore };
+  return { projects: projectStore, jobs: jobStore, events: eventStore, measurements: measurementStore, incidents: incidentStore, notifications: notificationStore };
 }
