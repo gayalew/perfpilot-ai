@@ -1,6 +1,7 @@
 import type { Finding, FixId } from '../diagnose.js';
 import type { SiteConfig } from '../config.js';
 import type { AiEditor } from '../ai-edit.js';
+import type { LayoutShiftReport } from './layout-shift.js';
 
 export interface ApplyContext {
   dir: string;
@@ -9,6 +10,8 @@ export interface ApplyContext {
   ai?: AiEditor;
   /** Gate failure text from the previous attempt. Untrusted data, not instructions. */
   repairReason?: string;
+  /** Injectable layout-shift probe. The default starts the site and uses Playwright. */
+  probeLayoutShifts?: (url: string) => Promise<LayoutShiftReport>;
 }
 
 export interface ApplyResult {
@@ -16,6 +19,8 @@ export interface ApplyResult {
   changedFiles: string[];
   description: string;
   skippedReason?: string;
+  /** Probe or other evidence. Shown with a failed step; it does not change the gate. */
+  note?: string;
 }
 
 export interface FixApplier {

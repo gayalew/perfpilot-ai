@@ -8,7 +8,9 @@ import { planFixes } from './gemini.js';
 import { PROFILES, runLighthouseOnce, type ProfileName } from './lighthouse-runner.js';
 import { aggregate, measureInterleaved, measureUrl, type Measurement } from './measure.js';
 import { METRICS, formatMetric } from './metrics.js';
-import { formatTable, optimize } from './optimize.js';
+import { formatTable, optimize, type Ledger } from './optimize.js';
+import { renderReportHtml } from './report/html.js';
+import { renderReportPdf } from './report/pdf.js';
 
 const HELP = `PerfPilot worker
 
@@ -18,6 +20,7 @@ Usage:
   perfpilot-worker compare <baseline.json> <candidate.json> [--out result.json]
   perfpilot-worker diagnose <url> [--profile mobile] [--no-ai] [--out diagnosis.json]
   perfpilot-worker optimize <repoPath> [--runs 4] [--final-runs 5] [--max-steps 12] [--no-ai] [--out-dir runs]
+  perfpilot-worker report <ledger.json> --out report.pdf
 
 Profiles: ${Object.keys(PROFILES).join(', ')}
 Set PERFPILOT_CHROME to use a specific Chrome/Chromium binary.
@@ -157,6 +160,22 @@ async function main(): Promise<void> {
     console.log(formatTable(result.ledger));
     console.log(`\nWrote ${result.runDir}`);
     console.log(`Wall clock: ${((Date.now() - started) / 1000).toFixed(1)} s`);
+    return;
+  }
+
+  if (command === 'report') {
+    if (!args[0]) throw new Error('report needs a ledger.json path');
+    if (!flags.out) throw new Error('report needs --out report.pdf');
+    const ledger = JSON.parse(await readFile(args[0], 'utf8')) as Ledger;
+    const target = ledger.repo;
+    const html = renderReportHtml(ledger, {
+      projectName: path.basename(target.replace(/\\/g, '/')) || 'PerfPilot',
+      target,
+      version: '0.1.0',
+      generatedAt: ledger.finishedAt,
+    });
+    await renderReportPdf(html, path.resolve(flags.out));
+    console.log(`Wrote ${path.resolve(flags.out)}`);
     return;
   }
 

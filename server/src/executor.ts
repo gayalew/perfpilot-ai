@@ -26,6 +26,7 @@ export interface LocalExecutorOptions {
   specFor: (job: Job, project: Project) => unknown;
   redact?: (text: string) => string;
   timeoutMs?: number;
+  onSettled?: (info: { job: Job; project: Project; status: JobStatus; payload: unknown }) => Promise<void>;
 }
 
 interface Active {
@@ -90,6 +91,8 @@ export class LocalExecutor implements Executor {
     const running = await this.options.stores.jobs.listByStatus('running');
     for (const job of running) {
       await this.mark(job.id, 'failed', { error: 'server restarted' });
+      const project = await this.options.stores.projects.get(job.projectId).catch(() => null);
+      await this.settled(job, project, 'failed', { ok: false, error: 'server restarted' });
     }
     const queued = await this.options.stores.jobs.listByStatus('queued');
     for (const job of queued) await this.start(job);
@@ -137,6 +140,7 @@ export class LocalExecutor implements Executor {
       void killTree(child.pid).then(async () => {
         await this.mark(job.id, 'failed', { error: 'timed out after 90 minutes' });
         await this.emit(job.id, 'job-end', { ok: false, error: 'timed out after 90 minutes' });
+        await this.settled(job, project, 'failed', { ok: false, error: 'timed out after 90 minutes' });
         if (this.active === active) this.active = null;
         resolve();
         this.kick();
@@ -162,7 +166,9 @@ export class LocalExecutor implements Executor {
       active.done = true;
       if (active.timer) clearTimeout(active.timer);
       void this.mark(job.id, 'failed', { error: this.redact(err.message) }).then(async () => {
-        await this.emit(job.id, 'job-end', { ok: false, error: this.redact(err.message) });
+        const error = this.redact(err.message);
+        await this.emit(job.id, 'job-end', { ok: false, error });
+        await this.settled(job, project, 'failed', { ok: false, error });
         if (this.active === active) this.active = null;
         resolve();
         this.kick();
@@ -175,7 +181,9 @@ export class LocalExecutor implements Executor {
       const failed = code !== 0;
       const error = failed ? active.stderr.trim() || `exit ${code}` : null;
       void this.mark(job.id, failed ? 'failed' : 'succeeded', { error, result: failed ? { ok: false, error } : { ok: true } }).then(async () => {
-        await this.emit(job.id, 'job-end', { ok: !failed, error });
+        const payload = { ok: !failed, error };
+        await this.emit(job.id, 'job-end', payload);
+        await this.settled(job, project, failed ? 'failed' : 'succeeded', payload);
         if (this.active === active) this.active = null;
         resolve();
         this.kick();
@@ -219,12 +227,24 @@ export class LocalExecutor implements Executor {
         }).catch(() => undefined);
       }
       await this.emit(active.job.id, 'job-end', payload);
+      const project = await this.options.stores.projects.get(active.job.projectId).catch(() => null);
+      const notifyPayload = { ...payload, error: typeof payload.error === 'string' ? this.redact(payload.error) : payload.error };
+      await this.settled(active.job, project, active.cancelled ? 'cancelled' : ok ? 'succeeded' : 'failed', notifyPayload);
       if (this.active === active) this.active = null;
       active.resolve();
       this.kick();
       return;
     }
     await this.emit(active.job.id, parsed.type, parsed.payload);
+  }
+
+  private async settled(job: Job, project: Project | null, status: JobStatus, payload: unknown): Promise<void> {
+    if (!project || status === 'cancelled' || !this.options.onSettled) return;
+    try {
+      await this.options.onSettled({ job, project, status, payload });
+    } catch {
+      /* a notification must not change the job */
+    }
   }
 
   private async mark(jobId: string, status: JobStatus, extra: { error?: string | null; result?: unknown; prUrl?: string | null }): Promise<void> {

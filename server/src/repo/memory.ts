@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Job, JobEvent, JobPatch, JobStatus, JobWithProject, Measurement, Project, ProjectInput } from '../types.js';
-import type { EventStore, JobStore, MeasurementStore, ProjectStore, Stores } from './types.js';
+import type { Job, JobEvent, JobPatch, JobStatus, JobWithProject, Measurement, Notification, Project, ProjectInput } from '../types.js';
+import type { EventStore, JobStore, MeasurementStore, NotificationStore, ProjectStore, Stores } from './types.js';
 
 function now(): string {
   return new Date().toISOString();
@@ -28,6 +28,8 @@ export function createMemoryStores(): Stores {
   const jobs: Job[] = [];
   const events: JobEvent[] = [];
   const measurements: Measurement[] = [];
+  const notifications: Notification[] = [];
+  let notificationId = 1;
   let eventId = 0;
   let measurementId = 0;
 
@@ -149,5 +151,25 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  return { projects: projectStore, jobs: jobStore, events: eventStore, measurements: measurementStore };
+  const notificationStore: NotificationStore = {
+    async insert(input) {
+      const row: Notification = {
+        id: notificationId++,
+        projectId: input.projectId,
+        jobId: input.jobId ?? null,
+        channel: input.channel,
+        kind: input.kind,
+        status: input.status,
+        error: input.error ?? null,
+        createdAt: now(),
+      };
+      notifications.push(row);
+      return row;
+    },
+    async listByJob(jobId) {
+      return notifications.filter((row) => row.jobId === jobId);
+    },
+  };
+
+  return { projects: projectStore, jobs: jobStore, events: eventStore, measurements: measurementStore, notifications: notificationStore };
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { createJob, deleteProject, getProject, listProjectJobs, type Job, type JobType, type Project } from '../api.ts';
+import { createJob, deleteProject, getProject, listProjectJobs, notifyTest, type Job, type JobType, type Project } from '../api.ts';
 import { Badge } from '../components/Badge.tsx';
 import { Button } from '../components/Button.tsx';
 import { Card } from '../components/Card.tsx';
@@ -32,6 +32,7 @@ export function ProjectPage() {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [runError, setRunError] = useState('');
+  const [notifyBusy, setNotifyBusy] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -79,6 +80,16 @@ export function ProjectPage() {
               <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{targetOf(project)}</p>
             </div>
             <div className="flex gap-2">
+              <Button variant="ghost" disabled={notifyBusy} onClick={() => {
+                setNotifyBusy(true);
+                notifyTest(project.id)
+                  .then((result) => {
+                    const line = (name: string, row: { status: string; error?: string }) => `${name}: ${row.status}${row.error ? ` (${row.error})` : ''}`;
+                    toast(`${line('Email', result.email)}. ${line('Telegram', result.telegram)}.`);
+                  })
+                  .catch((caught: unknown) => toast(caught instanceof Error ? caught.message : 'Could not send the test'))
+                  .finally(() => setNotifyBusy(false));
+              }}>{notifyBusy ? 'Sending…' : 'Send test notification'}</Button>
               <Button href={`/projects/${project.id}/edit`} variant="ghost">Edit</Button>
               <Button variant="danger" onClick={() => setConfirming(true)}>Delete</Button>
             </div>

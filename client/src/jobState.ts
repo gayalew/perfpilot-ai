@@ -6,18 +6,20 @@
  * - log              { line }
  * - step-start       { order, fix }
  * - gate-start       { order, fix, gate }            gate: build | smoke | visual | performance
- * - gate-end         { order, fix, gate, passed, details, ms }
- * - step-end         { order, fix, status, reason }  status: kept | reverted | skipped | error
+ * - baseline         { aggregate, findingsCount }
+ * - plan             { source, note?, steps: [{ order, fix, title, risk, rationale, expectedImpact }] }
+ * - gate-end         { order, fix, gate, passed, details, ms, comparison?, runsPerSide? }
+ * - step-end         { order, fix, status, reason, attempts?, metricsSummary? }
  * - run-end          { kept, reverted, skipped, errored }
  * - pr-created       { url, number }
+ * - report-ready     { file }
  * - job-end          audit success: { ok:true, baseline, findings, plan }
  *                    optimize:      { ok:true, prUrl, summary, ledger, branch? }
  *                    nothing kept:  { ok:true, prUrl:null, reason, summary, ledger }
  *                    failure:       { ok:false, error }
  *
- * Live optimize events do not include the baseline, the plan, repair attempts, or the
- * per-metric comparison. Those arrive on job-end.ledger (and on GET /api/jobs/:id/ledger).
- * Audit baseline and plan arrive only on job-end. applyLedger overlays them.
+ * Baseline, plan, the performance comparison, and attempt counts also arrive as live events.
+ * job-end.ledger is still applied last and remains the source of truth.
  * Unknown event types are ignored.
  */
 
@@ -44,6 +46,7 @@ export interface MetricChange {
   change: number;
   p: number;
   verdict: string;
+  countedAsHarm?: boolean;
 }
 
 export interface Experiment {
@@ -216,6 +219,7 @@ function readMetrics(comparison: unknown): MetricChange[] {
       change,
       p,
       verdict: typeof metric.verdict === 'string' ? metric.verdict : 'unchanged',
+      countedAsHarm: metric.countedAsHarm === true,
     });
   }
   return rows;
@@ -230,12 +234,13 @@ function readPlan(plan: unknown): { source: 'gemini' | 'heuristic' | null; note:
     for (const step of plan.steps) {
       if (!isRecord(step) || typeof step.fix !== 'string') continue;
       const info = catalog(step.fix);
+      const risk = step.risk === 'low' || step.risk === 'medium' || step.risk === 'high' ? step.risk : info.risk;
       steps.push({
         order: num(step.order) ?? steps.length + 1,
         fix: step.fix,
-        title: info.title,
+        title: typeof step.title === 'string' ? step.title : info.title,
         rationale: typeof step.rationale === 'string' ? step.rationale : info.summary,
-        risk: info.risk,
+        risk,
       });
     }
   }
@@ -324,9 +329,38 @@ export function applyLedger(state: JobView, ledger: unknown): JobView {
   return next;
 }
 
+function readSummary(rows: unknown): MetricChange[] {
+  if (!Array.isArray(rows)) return [];
+  const out: MetricChange[] = [];
+  for (const row of rows) {
+    if (!isRecord(row)) continue;
+    const before = num(row.before);
+    const after = num(row.after);
+    if (before == null || after == null) continue;
+    out.push({
+      key: typeof row.key === 'string' ? row.key : '',
+      label: typeof row.label === 'string' ? row.label : String(row.key ?? ''),
+      before,
+      after,
+      change: num(row.relativeChange) ?? (before === 0 ? 0 : (after - before) / Math.abs(before)),
+      p: num(row.p) ?? 1,
+      verdict: typeof row.verdict === 'string' ? row.verdict : 'unchanged',
+    });
+  }
+  return out;
+}
+
 function apply(state: JobView, type: string, payload: unknown): JobView {
   const body = isRecord(payload) ? payload : {};
   if (type === 'job-start') return { ...state, running: true };
+  if (type === 'baseline') {
+    const baseline = snapshotFromAggregate(body.aggregate);
+    return baseline ? { ...state, baseline } : state;
+  }
+  if (type === 'plan') {
+    const plan = readPlan(body);
+    return { ...state, plan: plan.steps, planSource: plan.source, planNote: plan.note };
+  }
   if (type === 'log') {
     const line = typeof body.line === 'string' ? body.line : '';
     if (!line) return state;
@@ -345,10 +379,12 @@ function apply(state: JobView, type: string, payload: unknown): JobView {
     if (order == null || (gate !== 'build' && gate !== 'smoke' && gate !== 'visual' && gate !== 'performance')) return state;
     const fix = typeof body.fix === 'string' ? body.fix : '';
     const nextState: GateState = type === 'gate-start' ? 'running' : body.passed === true ? 'passed' : 'failed';
+    const liveMetrics = type === 'gate-end' && gate === 'performance' ? readMetrics(body.comparison) : [];
     const experiments = mapExperiment(ensure(state.experiments, order, fix), order, (item) => ({
       ...item,
       status: item.status === 'pending' ? 'running' : item.status,
       gates: item.gates.map((itemGate) => (itemGate.name === gate ? { ...itemGate, state: nextState } : itemGate)),
+      metrics: liveMetrics.length ? liveMetrics : item.metrics,
     }));
     return { ...state, running: true, experiments };
   }
@@ -357,11 +393,13 @@ function apply(state: JobView, type: string, payload: unknown): JobView {
     const status = knownStatus(body.status);
     if (order == null || !status) return state;
     const fix = typeof body.fix === 'string' ? body.fix : '';
+    const summary = readSummary(body.metricsSummary);
     const experiments = mapExperiment(ensure(state.experiments, order, fix), order, (item) => ({
       ...item,
       status,
       reason: typeof body.reason === 'string' ? body.reason : item.reason,
       attempts: num(body.attempts) ?? item.attempts,
+      metrics: summary.length && item.metrics.length === 0 ? summary : item.metrics,
       gates: item.gates.map((gate) => (gate.state === 'pending' || gate.state === 'running' ? { ...gate, state: 'not-run' } : gate)),
     }));
     return { ...state, experiments };

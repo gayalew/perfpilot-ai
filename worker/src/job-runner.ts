@@ -6,7 +6,9 @@ import { aggregate, measureUrl } from './measure.js';
 import { extractFindings } from './diagnose.js';
 import { planFixes } from './gemini.js';
 import { runLighthouseOnce } from './lighthouse-runner.js';
-import { optimize, buildPrBody } from './optimize.js';
+import { optimize, buildPrBody, baselineEvent, planEvent, type Ledger } from './optimize.js';
+import { renderReportHtml } from './report/html.js';
+import { renderReportPdf } from './report/pdf.js';
 import { git } from './repo.js';
 
 export interface JobSpec {
@@ -98,7 +100,29 @@ async function runAudit(spec: JobSpec): Promise<void> {
   const lhr = await runLighthouseOnce({ url, profile: 'mobile' });
   const findings = extractFindings(lhr);
   const plan = spec.useAi ? await planFixes(findings, { maxSteps: spec.maxSteps }) : await planFixes(findings, { apiKey: '', maxSteps: spec.maxSteps });
-  emit('job-end', { ok: true, baseline: aggregate(measured), findings, plan });
+  const baseline = aggregate(measured);
+  emit('baseline', baselineEvent(baseline, findings.length));
+  emit('plan', planEvent(plan));
+  emit('job-end', { ok: true, baseline, findings, plan });
+}
+
+async function writeReport(spec: JobSpec, ledger: Ledger, prUrl: string | null): Promise<void> {
+  try {
+    const target = spec.project.mode === 'url'
+      ? (spec.project.url ?? '')
+      : `${spec.project.repoOwner ?? ''}/${spec.project.repoName ?? ''}${spec.project.rootDir ? `/${spec.project.rootDir}` : ''}`;
+    const html = renderReportHtml(ledger, {
+      projectName: spec.project.repoName || spec.project.url || 'PerfPilot',
+      target,
+      version: '0.1.0',
+      prUrl,
+      generatedAt: ledger.finishedAt,
+    });
+    await renderReportPdf(html, path.join(spec.runDir, 'report.pdf'));
+    emit('report-ready', { file: 'report.pdf' });
+  } catch {
+    emit('log', { line: 'report pdf was not written' });
+  }
 }
 
 async function runOptimize(spec: JobSpec): Promise<void> {
@@ -127,6 +151,7 @@ async function runOptimize(spec: JobSpec): Promise<void> {
   });
   const kept = result.ledger.steps.filter((step) => step.status === 'kept');
   if (kept.length === 0) {
+    await writeReport(spec, result.ledger, null);
     emit('job-end', { ok: true, prUrl: null, reason: 'No fix was kept, so no branch was pushed.', summary: result.summary, ledger: result.ledger });
     return;
   }
@@ -134,6 +159,7 @@ async function runOptimize(spec: JobSpec): Promise<void> {
   await runGit(site, ['-c', headerArg(token), 'push', 'origin', `HEAD:refs/heads/${result.branch}`], token);
   const pr = await openPullRequest(spec, result.branch, `PerfPilot: ${kept.length} proven performance improvements`, body, token);
   emit('pr-created', { url: pr.url, number: pr.number });
+  await writeReport(spec, result.ledger, pr.url);
   emit('job-end', { ok: true, prUrl: pr.url, summary: result.summary, ledger: result.ledger, branch: result.branch });
 }
 

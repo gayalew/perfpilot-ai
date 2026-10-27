@@ -112,12 +112,96 @@ export function judgePerformance(comparison: Comparison): PerformanceDecision {
   return { passed, details, regressions };
 }
 
+export interface LiveComparisonMetric {
+  key: string;
+  label: string;
+  baselineMedian: number;
+  candidateMedian: number;
+  relativeChange: number;
+  pBetter: number;
+  pWorse: number;
+  verdict: string;
+  countedAsHarm: boolean;
+}
+
+export interface MetricSummaryRow {
+  key: string;
+  label: string;
+  before: number;
+  after: number;
+  relativeChange: number;
+  p: number;
+  verdict: string;
+}
+
 export type OptimizeEvent =
+  | { type: 'baseline'; aggregate: Record<string, { median: number; n: number } | null>; findingsCount: number }
+  | { type: 'plan'; source: 'gemini' | 'heuristic'; note?: string; steps: Array<{ order: number; fix: string; title: string; risk: 'low' | 'medium' | 'high'; rationale: string; expectedImpact: string }> }
   | { type: 'step-start'; order: number; fix: string }
   | { type: 'gate-start'; order: number; fix: string; gate: string }
-  | { type: 'gate-end'; order: number; fix: string; gate: string; passed: boolean; details: string; ms: number }
-  | { type: 'step-end'; order: number; fix: string; status: StepStatus; reason: string }
+  | { type: 'gate-end'; order: number; fix: string; gate: string; passed: boolean; details: string; ms: number; comparison?: { verdict: string; metrics: LiveComparisonMetric[] }; runsPerSide?: number }
+  | { type: 'step-end'; order: number; fix: string; status: StepStatus; reason: string; attempts?: number; metricsSummary?: MetricSummaryRow[] }
   | { type: 'run-end'; kept: number; reverted: number; skipped: number; errored: number };
+
+export function baselineEvent(aggregate: Aggregate, findingsCount: number): OptimizeEvent {
+  const slim: Record<string, { median: number; n: number } | null> = {};
+  for (const [key, summary] of Object.entries(aggregate)) {
+    slim[key] = summary ? { median: summary.median, n: summary.n } : null;
+  }
+  return { type: 'baseline', aggregate: slim, findingsCount };
+}
+
+export function planEvent(plan: Plan): OptimizeEvent {
+  return {
+    type: 'plan',
+    source: plan.source,
+    note: plan.note,
+    steps: plan.steps.map((step) => ({
+      order: step.order,
+      fix: step.fix,
+      title: FIX_CATALOG[step.fix].title,
+      risk: FIX_CATALOG[step.fix].risk,
+      rationale: step.rationale,
+      expectedImpact: step.expectedImpact,
+    })),
+  };
+}
+
+function liveComparison(result: GateResult, runsPerSide: number): Pick<Extract<OptimizeEvent, { type: 'gate-end' }>, 'comparison' | 'runsPerSide'> {
+  if (result.name !== 'performance' || !result.comparison) return {};
+  const harms = new Set(judgePerformance(result.comparison).regressions.filter((item) => item.harm).map((item) => item.key));
+  return {
+    runsPerSide,
+    comparison: {
+      verdict: result.comparison.verdict,
+      metrics: result.comparison.metrics.map((metric) => ({
+        key: metric.key,
+        label: metric.label,
+        baselineMedian: metric.baselineMedian,
+        candidateMedian: metric.candidateMedian,
+        relativeChange: metric.relativeChange,
+        pBetter: metric.pBetter,
+        pWorse: metric.pWorse,
+        verdict: metric.verdict,
+        countedAsHarm: harms.has(metric.key),
+      })),
+    },
+  };
+}
+
+function summaryRows(step: LedgerStep): MetricSummaryRow[] {
+  const comparison = step.gates.find((gate) => gate.name === 'performance')?.comparison;
+  if (!comparison) return [];
+  return comparison.metrics.map((metric) => ({
+    key: metric.key,
+    label: metric.label,
+    before: metric.baselineMedian,
+    after: metric.candidateMedian,
+    relativeChange: metric.relativeChange,
+    p: Math.min(metric.pBetter, metric.pWorse),
+    verdict: metric.verdict,
+  }));
+}
 
 export interface OptimizeOptions {
   repoPath: string;
@@ -364,6 +448,8 @@ export async function optimize(options: OptimizeOptions): Promise<OptimizeResult
       ? await deps.planFixes(findings, { maxSteps })
       : await deps.planFixes(findings, { apiKey: '', maxSteps });
     aiSource = plan.note ? `${plan.source} (${plan.note})` : plan.source;
+    await emit(options, eventsFile, baselineEvent(baselineAggregate, findings.length));
+    await emit(options, eventsFile, planEvent(plan));
     await baseline.stop();
 
     for (const step of plan.steps.slice(0, maxSteps)) {
@@ -386,7 +472,15 @@ export async function optimize(options: OptimizeOptions): Promise<OptimizeResult
         ai,
       });
       steps.push(recorded);
-      await emit(options, eventsFile, { type: 'step-end', order: step.order, fix: step.fix, status: recorded.status, reason: recorded.reason });
+      await emit(options, eventsFile, {
+        type: 'step-end',
+        order: step.order,
+        fix: step.fix,
+        status: recorded.status,
+        reason: recorded.reason,
+        attempts: recorded.attempts ?? 1,
+        metricsSummary: summaryRows(recorded),
+      });
     }
 
     try {
@@ -508,9 +602,9 @@ async function runStep(input: StepInput): Promise<LedgerStep> {
   if (!applier) return blank('skipped', 'no applier');
 
   type Outcome =
-    | { kind: 'skipped'; reason: string; files: string[] }
-    | { kind: 'gates'; files: string[]; gates: GateResult[] }
-    | { kind: 'site'; files: string[]; message: string };
+    | { kind: 'skipped'; reason: string; files: string[]; note?: string }
+    | { kind: 'gates'; files: string[]; gates: GateResult[]; note?: string }
+    | { kind: 'site'; files: string[]; message: string; note?: string };
 
   const finish = async (outcome: Outcome, attempts: number): Promise<LedgerStep> => {
     if (outcome.kind === 'skipped') return blank('skipped', outcome.reason, { files: outcome.files, attempts });
@@ -532,8 +626,14 @@ async function runStep(input: StepInput): Promise<LedgerStep> {
         regressions,
       });
     }
+    let evidenceNote = outcome.note ? ` ${outcome.note}` : '';
+    if (input.fix === 'reserve-space') {
+      const diff = await git(input.workDir, ['diff', '--']).catch(() => ({ stdout: '', stderr: '', code: 1 }));
+      const snippet = diff.stdout.trim().slice(0, 1200);
+      if (snippet) evidenceNote = `${evidenceNote}\nLast edit:\n${snippet}`;
+    }
     await resetHard(input.workDir);
-    return blank('reverted', `${failed.name}: ${failed.details}`, {
+    return blank('reverted', `${failed.name}: ${failed.details}${evidenceNote}`, {
       files: outcome.files,
       gates,
       metrics: metricsOf(performance?.comparison),
@@ -552,7 +652,8 @@ async function runStep(input: StepInput): Promise<LedgerStep> {
       repairReason,
     });
     files = applied.changedFiles.length ? applied.changedFiles : await changedFiles(input.workDir).catch(() => []);
-    if (!applied.applied) return { kind: 'skipped', reason: applied.skippedReason ?? 'not applied', files };
+    const note = applied.note;
+    if (!applied.applied) return { kind: 'skipped', reason: applied.skippedReason ?? 'not applied', files, note };
 
     const located = await locateSite(input.workDir, 'baseline');
     const sites: RunningSite[] = [];
@@ -586,16 +687,17 @@ async function runStep(input: StepInput): Promise<LedgerStep> {
               passed: result.passed,
               details: result.details,
               ms: result.ms,
+              ...liveComparison(result, input.runs),
             });
           }
         },
       };
       const gates = await input.deps.runGates(gateCtx);
       for (const gate of gates) applyPerformancePolicy(gate);
-      return { kind: 'gates', files, gates };
+      return { kind: 'gates', files, gates, note };
     } catch (err) {
       const site = siteFailureMessage(err);
-      if (site) return { kind: 'site', files, message: site };
+      if (site) return { kind: 'site', files, message: site, note };
       throw err;
     } finally {
       await stopAll(sites);
@@ -609,10 +711,11 @@ async function runStep(input: StepInput): Promise<LedgerStep> {
     const failed = first.kind === 'site' || first.gates.some((gate) => !gate.passed && gate.details !== 'not run');
     if (failed && applier.kind === 'ai') {
       await resetHard(input.workDir);
-      const reason = (first.kind === 'site' ? first.message : first.gates.find((gate) => !gate.passed && gate.details !== 'not run')?.details ?? 'gate failed').slice(0, 1500);
+      const gateText = (first.kind === 'site' ? first.message : first.gates.find((gate) => !gate.passed && gate.details !== 'not run')?.details ?? 'gate failed').slice(0, 900);
+      const reason = `${first.note ? `${first.note}\n` : ''}${gateText}`.slice(0, 1500);
       const second = await attempt(reason);
       if (second.kind === 'skipped') {
-        return blank('reverted', second.reason, { files: second.files, attempts: 2 });
+        return blank('reverted', `${second.reason}${second.note ? ` ${second.note}` : ''}`, { files: second.files, attempts: 2 });
       }
       return await finish(second, 2);
     }

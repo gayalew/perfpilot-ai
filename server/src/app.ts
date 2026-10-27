@@ -1,3 +1,5 @@
+import { createReadStream } from 'node:fs';
+import { access } from 'node:fs/promises';
 import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
@@ -7,7 +9,8 @@ import type { Config } from './config.js';
 import type { EventBus } from './events.js';
 import type { Executor } from './executor.js';
 import type { Stores } from './repo/types.js';
-import type { ProjectInput } from './types.js';
+import type { Project, ProjectInput } from './types.js';
+import type { ChannelResult } from './notify/dispatch.js';
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
 
@@ -74,6 +77,8 @@ export interface AppDeps {
   stores: Stores;
   bus: EventBus;
   executor: Executor;
+  reportFile?: (jobId: string) => string;
+  notifyTest?: (project: Project) => Promise<{ email: ChannelResult; telegram: ChannelResult }>;
 }
 
 function cookieFlags(config: AppDeps['config']): { sameSite: 'lax' | 'none'; secure: boolean } {
@@ -321,6 +326,53 @@ export function createApp(deps: AppDeps): express.Express {
       return;
     }
     res.json(ledger);
+  }));
+
+  app.get('/api/jobs/:id/report.pdf', asyncRoute(async (req, res) => {
+    const job = await stores.jobs.get(String(req.params.id));
+    if (!job) {
+      res.status(404).json({ error: 'job not found' });
+      return;
+    }
+    const file = deps.reportFile?.(job.id);
+    if (!file) {
+      res.status(404).json({ error: 'report not found' });
+      return;
+    }
+    try {
+      await access(file);
+    } catch {
+      res.status(404).json({ error: 'report not found' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="perfpilot-report.pdf"');
+    createReadStream(file).pipe(res);
+  }));
+
+  app.get('/api/jobs/:id/notifications', asyncRoute(async (req, res) => {
+    const job = await stores.jobs.get(String(req.params.id));
+    if (!job) {
+      res.status(404).json({ error: 'job not found' });
+      return;
+    }
+    res.json(await stores.notifications.listByJob(job.id));
+  }));
+
+  app.post('/api/projects/:id/notify-test', asyncRoute(async (req, res) => {
+    const project = await stores.projects.get(String(req.params.id));
+    if (!project) {
+      res.status(404).json({ error: 'project not found' });
+      return;
+    }
+    if (!deps.notifyTest) {
+      res.json({
+        email: { status: 'skipped', error: 'notifications are not configured' },
+        telegram: { status: 'skipped', error: 'notifications are not configured' },
+      });
+      return;
+    }
+    res.json(await deps.notifyTest(project));
   }));
 
   app.get('/api/jobs/:id/summary.md', asyncRoute(async (req, res) => {

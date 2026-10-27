@@ -73,3 +73,23 @@ export interface Measurement {
   profile: string;
   metrics: unknown;
 }
+
+export interface Notification {
+  id: number;
+  projectId: string;
+  jobId: string | null;
+  channel: 'email' | 'telegram';
+  kind: string;
+  status: 'sent' | 'failed' | 'dry-run';
+  error: string | null;
+  createdAt: string;
+}
+
+export interface NotificationInput {
+  projectId: string;
+  jobId?: string | null;
+  channel: 'email' | 'telegram';
+  kind: string;
+  status: 'sent' | 'failed' | 'dry-run';
+  error?: string | null;
+}

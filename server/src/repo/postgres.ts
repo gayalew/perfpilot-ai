@@ -216,5 +216,31 @@ export function createPgStores(pool: pg.Pool): Stores {
         }));
       },
     },
+    notifications: {
+      async insert(input) {
+        const result = await pool.query(
+          `INSERT INTO notifications (project_id, job_id, channel, kind, status, error) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+          [input.projectId, input.jobId ?? null, input.channel, input.kind, input.status, input.error ?? null],
+        );
+        return mapNotification(result.rows[0]);
+      },
+      async listByJob(jobId) {
+        const result = await pool.query('SELECT * FROM notifications WHERE job_id = $1 ORDER BY id', [jobId]);
+        return result.rows.map((row) => mapNotification(row));
+      },
+    },
+  };
+}
+
+function mapNotification(row: Record<string, unknown>) {
+  return {
+    id: Number(row.id),
+    projectId: String(row.project_id),
+    jobId: row.job_id ? String(row.job_id) : null,
+    channel: String(row.channel) as 'email' | 'telegram',
+    kind: String(row.kind),
+    status: String(row.status) as 'sent' | 'failed' | 'dry-run',
+    error: row.error ? String(row.error) : null,
+    createdAt: new Date(String(row.created_at)).toISOString(),
   };
 }

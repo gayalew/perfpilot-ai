@@ -1,4 +1,4 @@
-import type { Job, JobEvent, JobPatch, JobStatus, JobType, JobWithProject, Measurement, Project, ProjectInput } from '../types.js';
+import type { Job, JobEvent, JobPatch, JobStatus, JobType, JobWithProject, Measurement, Notification, NotificationInput, Project, ProjectInput } from '../types.js';
 
 export interface ProjectStore {
   list(): Promise<Project[]>;
@@ -28,9 +28,15 @@ export interface MeasurementStore {
   listByProject(projectId: string): Promise<Measurement[]>;
 }
 
+export interface NotificationStore {
+  insert(input: NotificationInput): Promise<Notification>;
+  listByJob(jobId: string): Promise<Notification[]>;
+}
+
 export interface Stores {
   projects: ProjectStore;
   jobs: JobStore;
   events: EventStore;
   measurements: MeasurementStore;
+  notifications: NotificationStore;
 }

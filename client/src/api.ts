@@ -150,6 +150,32 @@ export function summaryMarkdownUrl(id: string): string {
   return `${base}/api/jobs/${id}/summary.md`;
 }
 
+export function reportPdfUrl(id: string): string {
+  return `${base}/api/jobs/${id}/report.pdf`;
+}
+
+export interface NotificationRow {
+  id: number;
+  channel: 'email' | 'telegram';
+  kind: string;
+  status: 'sent' | 'failed' | 'dry-run';
+  error: string | null;
+  createdAt: string;
+}
+
+export interface ChannelResult {
+  status: 'sent' | 'failed' | 'dry-run' | 'skipped';
+  error?: string;
+}
+
+export function listNotifications(id: string): Promise<NotificationRow[]> {
+  return request(`/api/jobs/${id}/notifications`);
+}
+
+export function notifyTest(projectId: string): Promise<{ email: ChannelResult; telegram: ChannelResult }> {
+  return request(`/api/projects/${projectId}/notify-test`, { method: 'POST' });
+}
+
 export function eventsUrl(id: string): string {
   return `${base}/api/jobs/${id}/events`;
 }

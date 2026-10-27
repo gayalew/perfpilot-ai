@@ -124,4 +124,42 @@ describe('job reducer', () => {
     expect(view.planNote).toMatch(/HTTP 503/);
     expect(view.resultNote).toMatch(/no branch/);
   });
+
+  test('baseline, plan, the performance table, and attempt count appear before the ledger', () => {
+    const comparison = {
+      verdict: 'regressed',
+      metrics: [{ ...metric('cls', 'CLS', 0.19, 0.25, 'regressed'), countedAsHarm: true }],
+    };
+    const midway = reduceEvents([
+      { id: 1, type: 'job-start', payload: { type: 'optimize' } },
+      { id: 2, type: 'baseline', payload: { aggregate: agg(38, 30800, 543, 0.19, 8000000), findingsCount: 4 } },
+      {
+        id: 3,
+        type: 'plan',
+        payload: {
+          source: 'gemini',
+          steps: [{ order: 1, fix: 'reserve-space', title: 'Reserve space for late content', risk: 'medium', rationale: 'A banner shifts the page.', expectedImpact: 'CLS' }],
+        },
+      },
+      { id: 4, type: 'step-start', payload: { order: 1, fix: 'reserve-space' } },
+      { id: 5, type: 'gate-end', payload: { order: 1, fix: 'reserve-space', gate: 'performance', passed: false, details: 'harm', ms: 10, comparison, runsPerSide: 4 } },
+      { id: 6, type: 'step-end', payload: { order: 1, fix: 'reserve-space', status: 'reverted', reason: 'harm', attempts: 2, metricsSummary: [{ key: 'cls', label: 'CLS', before: 0.19, after: 0.25, relativeChange: 0.3, p: 0.02, verdict: 'regressed' }] } },
+    ]);
+    expect(midway.finished).toBe(false);
+    expect(midway.baseline?.score).toBe(38);
+    expect(midway.planSource).toBe('gemini');
+    expect(midway.plan[0]?.title).toBe('Reserve space for late content');
+    expect(midway.plan[0]?.risk).toBe('medium');
+    expect(midway.experiments[0]?.attempts).toBe(2);
+    expect(midway.experiments[0]?.metrics[0]?.countedAsHarm).toBe(true);
+    const after = reduceEvents([
+      ...[
+        { id: 1, type: 'job-start', payload: { type: 'optimize' } },
+        { id: 2, type: 'baseline', payload: { aggregate: agg(10, 1, 1, 1, 1), findingsCount: 1 } },
+      ],
+      { id: 7, type: 'job-end', payload: { ok: true, ledger } },
+    ]);
+    expect(after.baseline?.score).toBe(38);
+    expect(after.experiments.map((item) => item.status)).toEqual(['kept', 'kept', 'reverted', 'skipped']);
+  });
 });

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ApiError, cancelJob, getJob, getLedger, getProject, summaryMarkdownUrl, type Job } from '../api.ts';
+import { ApiError, cancelJob, getJob, getLedger, getProject, listNotifications, reportPdfUrl, summaryMarkdownUrl, type Job, type NotificationRow } from '../api.ts';
 import { watchJob } from '../events.ts';
-import { formatDuration, formatMetric, formatPercentChange, safeGithubUrl } from '../format.ts';
+import { formatDuration, formatMetric, formatPercentChange, formatRelativeTime, safeGithubUrl } from '../format.ts';
 import { applyLedger, emptyJobState, reduceJob, type Experiment, type GateName, type JobView, type MetricSnapshot } from '../jobState.ts';
 import { Badge } from '../components/Badge.tsx';
 import { Button } from '../components/Button.tsx';
@@ -76,7 +76,7 @@ function ExperimentCard({ experiment, running }: { experiment: Experiment; runni
                   const tone = row.verdict === 'improved' ? 'text-emerald-700 dark:text-emerald-300' : row.verdict === 'regressed' ? 'text-red-700 dark:text-red-300' : '';
                   return (
                     <tr key={row.key} className={tone}>
-                      <td className="py-1 pr-3">{row.label}{row.verdict === 'improved' ? ' · improved' : row.verdict === 'regressed' ? ' · regressed' : ''}</td>
+                      <td className="py-1 pr-3">{row.label}{row.verdict === 'improved' ? ' · improved' : row.verdict === 'regressed' ? ' · regressed' : ''}{row.countedAsHarm ? ' · counted as harm' : ''}</td>
                       <td className="py-1 pr-3 tabular-nums">{formatMetric(row.key, row.before)}</td>
                       <td className="py-1 pr-3 tabular-nums">{formatMetric(row.key, row.after)}</td>
                       <td className="py-1 pr-3 tabular-nums">{formatPercentChange(row.before, row.after)}</td>
@@ -103,6 +103,7 @@ export function JobPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [now, setNow] = useState(Date.now());
   const [confirming, setConfirming] = useState(false);
+  const [notices, setNotices] = useState<NotificationRow[]>([]);
   const pinned = useRef(true);
 
   useEffect(() => {
@@ -148,6 +149,9 @@ export function JobPage() {
       .finally(() => {
         if (!dropped) setLoading(false);
       });
+    listNotifications(id).then((rows) => {
+      if (!dropped) setNotices(rows);
+    }).catch(() => {});
     const stop = watchJob(
       id,
       (event) => {
@@ -183,6 +187,11 @@ export function JobPage() {
       stop();
     };
   }, [id, reloadKey]);
+
+  useEffect(() => {
+    if (!view.finished) return;
+    listNotifications(id).then(setNotices).catch(() => {});
+  }, [id, view.finished]);
 
   const live = job?.status === 'queued' || job?.status === 'running' || view.running;
   useEffect(() => {
@@ -322,9 +331,26 @@ export function JobPage() {
               <div className="mt-4 flex flex-wrap gap-2">
                 {pr && <Button href={pr} target="_blank" rel="noopener noreferrer">View pull request</Button>}
                 {view.ok !== false && <Button href={summaryMarkdownUrl(id)} variant="ghost">Download report (.md)</Button>}
+                {view.ok !== false && <Button href={reportPdfUrl(id)} variant="ghost">Download PDF report</Button>}
               </div>
             </Card>
           )}
+
+          <Card>
+            <h2 className="text-lg font-medium">Notifications</h2>
+            {notices.length === 0 ? <p className="mt-2 text-sm text-zinc-500">None yet.</p> : (
+              <ul className="mt-3 space-y-2 text-sm">
+                {notices.map((notice) => (
+                  <li key={notice.id} className="flex flex-wrap gap-x-3 gap-y-1">
+                    <span className="capitalize">{notice.channel}</span>
+                    <span>{notice.kind}</span>
+                    <span>{notice.status}</span>
+                    <span className="tabular-nums text-zinc-500">{formatRelativeTime(notice.createdAt)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
 
           <details className="rounded-xl bg-white p-4 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800">
             <summary className="cursor-pointer text-sm font-medium">Log</summary>
