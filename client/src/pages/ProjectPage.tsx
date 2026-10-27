@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { createJob, deleteProject, getProject, listProjectJobs, notifyTest, type Job, type JobType, type Project } from '../api.ts';
+import { createJob, deleteProject, getField, getProject, listProjectJobs, notifyTest, type FieldReport, type Job, type JobType, type Project } from '../api.ts';
 import { Badge } from '../components/Badge.tsx';
+import { FieldCard } from '../components/FieldCard.tsx';
 import { MonitoringCard } from '../components/MonitoringCard.tsx';
 import { Button } from '../components/Button.tsx';
 import { Card } from '../components/Card.tsx';
@@ -34,14 +35,17 @@ export function ProjectPage() {
   const [confirming, setConfirming] = useState(false);
   const [runError, setRunError] = useState('');
   const [notifyBusy, setNotifyBusy] = useState(false);
+  const [field, setField] = useState<FieldReport | null>(null);
+  const [fieldBusy, setFieldBusy] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    Promise.all([getProject(id), listProjectJobs(id)])
-      .then(([nextProject, nextJobs]) => {
+    Promise.all([getProject(id), listProjectJobs(id), getField(id).catch(() => null)])
+      .then(([nextProject, nextJobs, nextField]) => {
         setProject(nextProject);
         setJobs([...nextJobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+        setField(nextField);
         if (nextProject.mode === 'url') setType('audit');
       })
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Could not load the project'))
@@ -96,6 +100,13 @@ export function ProjectPage() {
             </div>
           </div>
           <MonitoringCard project={project} />
+          <FieldCard report={field} busy={fieldBusy} onRefresh={() => {
+            setFieldBusy(true);
+            createJob(id, { type: 'field', runs: 4 })
+              .then((job) => navigate(`/jobs/${job.id}`))
+              .catch((caught: unknown) => toast(caught instanceof Error ? caught.message : 'Could not start the field check'))
+              .finally(() => setFieldBusy(false));
+          }} />
           <Card>
             <h2 className="text-lg font-medium">Run</h2>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -108,6 +119,10 @@ export function ProjectPage() {
                 <label className={`mt-2 flex items-start gap-2 text-sm ${project.mode === 'url' ? 'opacity-60' : ''}`}>
                   <input type="radio" name="type" checked={type === 'optimize'} disabled={project.mode === 'url'} onChange={() => setType('optimize')} />
                   <span><span className="font-medium">Optimize</span> — apply and prove fixes. Repo mode only.</span>
+                </label>
+                <label className={`mt-2 flex items-start gap-2 text-sm ${project.mode === 'repo' ? 'opacity-60' : ''}`}>
+                  <input type="radio" name="type" checked={type === 'experiment'} disabled={project.mode === 'repo'} onChange={() => setType('experiment')} />
+                  <span><span className="font-medium">Experiment</span> — try runtime fixes on this URL. Nothing is written to a repository.</span>
                 </label>
               </fieldset>
               <div>

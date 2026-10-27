@@ -1,0 +1,59 @@
+# Runs one PerfPilot job on GitHub-hosted runners.
+# The server dispatches this workflow when EXECUTOR=github.
+# Required repository secrets: JOB_SECRET, GEMINI_API_KEY, GEMINI_MODEL, GOOGLE_API_KEY.
+# PERFPILOT_GITHUB_TOKEN is a PAT that can read the target repository. The callback URL
+# arrives as an input and must be reachable from GitHub (a public PerfPilot URL).
+name: PerfPilot job
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: PerfPilot job id
+        required: true
+        type: string
+      callback_url:
+        description: PerfPilot server origin
+        required: true
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npx playwright install chromium --with-deps
+      - name: Tell PerfPilot which run this is
+        env:
+          JOB_SECRET: ${{ secrets.JOB_SECRET }}
+          CALLBACK: ${{ inputs.callback_url }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          curl -fsS -X POST \
+            -H "x-job-secret: $JOB_SECRET" \
+            -H "content-type: application/json" \
+            --data "{\"type\":\"actions-run\",\"payload\":{\"runId\":$GITHUB_RUN_ID}}" \
+            "$CALLBACK/api/internal/jobs/$JOB_ID/events"
+      - name: Run the job and stream events
+        env:
+          JOB_SECRET: ${{ secrets.JOB_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.PERFPILOT_GITHUB_TOKEN }}
+          CALLBACK: ${{ inputs.callback_url }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          spec=$(curl -fsS -H "x-job-secret: $JOB_SECRET" "$CALLBACK/api/internal/jobs/$JOB_ID/spec")
+          printf '%s\n' "$spec" | node ./node_modules/tsx/dist/cli.mjs worker/src/job-runner.ts | while IFS= read -r line; do
+            printf '%s' "$line" | curl -fsS -X POST \
+              -H "x-job-secret: $JOB_SECRET" \
+              -H "content-type: application/json" \
+              --data-binary @- \
+              "$CALLBACK/api/internal/jobs/$JOB_ID/events" || true
+          done

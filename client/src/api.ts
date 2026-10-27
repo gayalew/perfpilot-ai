@@ -11,7 +11,7 @@ export class ApiError extends Error {
 const base = import.meta.env.VITE_API_URL ?? '';
 
 export type ProjectMode = 'url' | 'repo';
-export type JobType = 'audit' | 'optimize' | 'monitor';
+export type JobType = 'audit' | 'optimize' | 'monitor' | 'experiment' | 'field';
 export type MonitorStatus = 'ok' | 'learning' | 'breach' | 'regression';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -150,6 +150,26 @@ export function getProjectSummary(id: string): Promise<ProjectSummary> {
 
 export function createJob(projectId: string, input: { type: JobType; runs: number; maxSteps?: number; useAi?: boolean }): Promise<Job> {
   return request(`/api/projects/${projectId}/jobs`, { method: 'POST', body: JSON.stringify(input) });
+}
+
+export interface FieldMetric {
+  p75: number | null;
+  good: number | null;
+  ni: number | null;
+  poor: number | null;
+}
+
+export interface FieldReport {
+  fetchedAt: string;
+  url: string;
+  origin: string;
+  psi: { strategy: string; score: number | null; lcp: number | null; fcp: number | null; tbt: number | null; cls: number | null; speedIndex: number | null } | null;
+  crux: { formFactor: string; metrics: Record<string, FieldMetric> } | null;
+  notes: string[];
+}
+
+export function getField(projectId: string): Promise<FieldReport | null> {
+  return request(`/api/projects/${projectId}/field`);
 }
 
 export function listProjectJobs(projectId: string): Promise<Job[]> {

@@ -33,6 +33,7 @@ export interface MeasurementStore {
     compared?: unknown;
     samples?: unknown;
     medians?: unknown;
+    field?: unknown;
   }): Promise<Measurement>;
   listByProject(projectId: string): Promise<Measurement[]>;
 }

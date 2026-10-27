@@ -147,6 +147,7 @@ export function createMemoryStores(): Stores {
         compared: input.compared ?? null,
         samples: input.samples ?? null,
         medians: input.medians ?? null,
+        field: input.field ?? null,
       };
       measurements.push(row);
       return row;

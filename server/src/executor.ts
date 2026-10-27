@@ -208,7 +208,7 @@ export class LocalExecutor implements Executor {
       if (active.done) return;
       active.done = true;
       if (active.timer) clearTimeout(active.timer);
-      const payload = (parsed.payload ?? {}) as { ok?: boolean; error?: string; prUrl?: string | null; baseline?: unknown };
+      const payload = (parsed.payload ?? {}) as { ok?: boolean; error?: string; prUrl?: string | null; baseline?: unknown; field?: unknown };
       const ok = payload.ok !== false && !active.cancelled;
       await this.mark(active.job.id, active.cancelled ? 'cancelled' : ok ? 'succeeded' : 'failed', {
         error: active.cancelled ? null : ok ? null : this.redact(String(payload.error ?? 'job failed')),
@@ -224,6 +224,16 @@ export class LocalExecutor implements Executor {
           jobId: active.job.id,
           profile: 'mobile',
           metrics: payload.baseline,
+        }).catch(() => undefined);
+      }
+      if (payload.field) {
+        const psi = payload.field && typeof payload.field === 'object' ? (payload.field as { psi?: Record<string, unknown> }).psi : undefined;
+        await this.options.stores.measurements.insert({
+          projectId: active.job.projectId,
+          jobId: active.job.id,
+          profile: 'field',
+          metrics: psi ?? {},
+          field: payload.field,
         }).catch(() => undefined);
       }
       await this.emit(active.job.id, 'job-end', payload);

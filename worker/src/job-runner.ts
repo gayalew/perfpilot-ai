@@ -11,10 +11,12 @@ import { optimize, buildPrBody, baselineEvent, planEvent, type Ledger } from './
 import { renderReportHtml } from './report/html.js';
 import { renderReportPdf } from './report/pdf.js';
 import { git } from './repo.js';
+import { fetchField } from './field.js';
+import { runRuntimeExperiments } from './runtime/experiment.js';
 
 export interface JobSpec {
   jobId: string;
-  type: 'audit' | 'optimize' | 'monitor';
+  type: 'audit' | 'optimize' | 'monitor' | 'experiment' | 'field';
   runs: number;
   maxSteps: number;
   useAi: boolean;
@@ -34,7 +36,9 @@ const NAME = /^[A-Za-z0-9_.-]+$/;
 
 export function parseSpec(line: string): JobSpec {
   const raw = JSON.parse(line) as Partial<JobSpec>;
-  if (raw.type !== 'audit' && raw.type !== 'optimize' && raw.type !== 'monitor') throw new Error('type must be audit, optimize, or monitor');
+  if (raw.type !== 'audit' && raw.type !== 'optimize' && raw.type !== 'monitor' && raw.type !== 'experiment' && raw.type !== 'field') {
+    throw new Error('type must be audit, optimize, monitor, experiment, or field');
+  }
   if (!raw.jobId || !raw.runDir || !raw.project) throw new Error('job spec is missing jobId, runDir, or project');
   const onlyFixes = Array.isArray(raw.onlyFixes) ? raw.onlyFixes.map((item) => String(item)).filter(Boolean) : undefined;
   return {
@@ -107,7 +111,8 @@ async function runAudit(spec: JobSpec): Promise<void> {
   const baseline = aggregate(measured);
   emit('baseline', baselineEvent(baseline, findings.length));
   emit('plan', planEvent(plan));
-  emit('job-end', { ok: true, baseline, findings, plan });
+  const field = await fetchField(url).catch(() => null);
+  emit('job-end', { ok: true, baseline, findings, plan, ...(field ? { field } : {}) });
 }
 
 async function writeReport(spec: JobSpec, ledger: Ledger, prUrl: string | null): Promise<void> {
@@ -184,7 +189,55 @@ async function main(): Promise<void> {
   const spec = parseSpec(line);
   if (spec.type === 'audit') await runAudit(spec);
   else if (spec.type === 'monitor') await runMonitor(spec);
+  else if (spec.type === 'experiment') await runExperiment(spec);
+  else if (spec.type === 'field') await runField(spec);
   else await runOptimize(spec);
+}
+
+async function runField(spec: JobSpec): Promise<void> {
+  const url = spec.project.url;
+  if (!url) throw new Error('field data requires a project URL');
+  emit('job-start', { jobId: spec.jobId, type: 'field' });
+  const field = await fetchField(url);
+  emit('job-end', { ok: true, field });
+}
+
+async function runExperiment(spec: JobSpec): Promise<void> {
+  const url = spec.project.url;
+  if (!url) throw new Error('experiment requires a project URL');
+  if (spec.project.mode !== 'url') throw new Error('experiment requires a URL project');
+  const lhr = await runLighthouseOnce({ url, profile: 'mobile' });
+  const findings = extractFindings(lhr);
+  const plan = await planFixes(findings, { apiKey: '', maxSteps: spec.maxSteps });
+  const report = await runRuntimeExperiments({
+    url,
+    runs: spec.runs,
+    maxSteps: spec.maxSteps,
+    onlyFixes: spec.onlyFixes,
+    findings,
+    plan,
+    measure: (target) => measureUrl({ url: target, runs: spec.runs, profile: 'mobile', onProgress: () => undefined }),
+    onEvent: (event) => emit(event.type, event),
+  });
+  const ledger = {
+    runId: spec.jobId,
+    repo: url,
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    aiSource: 'runtime',
+    baseline: report.baseline,
+    final: null,
+    steps: report.steps,
+    runs: spec.runs,
+  };
+  emit('job-end', {
+    ok: true,
+    baseline: report.baseline,
+    findings,
+    plan,
+    ledger,
+    experiments: report.steps,
+  });
 }
 
 async function runMonitor(spec: JobSpec): Promise<void> {

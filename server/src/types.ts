@@ -1,5 +1,5 @@
 export type ProjectMode = 'url' | 'repo';
-export type JobType = 'audit' | 'optimize' | 'monitor';
+export type JobType = 'audit' | 'optimize' | 'monitor' | 'experiment' | 'field';
 export type MeasurementStatus = 'ok' | 'learning' | 'breach' | 'regression';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -77,6 +77,7 @@ export interface Measurement {
   compared: unknown;
   samples: unknown;
   medians: unknown;
+  field: unknown;
 }
 
 export interface Incident {

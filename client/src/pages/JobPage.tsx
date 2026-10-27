@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ApiError, cancelJob, getJob, getLedger, getProject, listNotifications, reportPdfUrl, summaryMarkdownUrl, type Job, type NotificationRow } from '../api.ts';
+import { ApiError, cancelJob, getJob, getLedger, getProject, listNotifications, reportPdfUrl, summaryMarkdownUrl, type FieldReport, type Job, type NotificationRow } from '../api.ts';
 import { watchJob } from '../events.ts';
 import { formatDuration, formatMetric, formatPercentChange, formatRelativeTime, formatRunTitle, isQuietChange, resultHeadline, safeGithubUrl } from '../format.ts';
 import type { MonitorStatus } from '../api.ts';
 import { applyLedger, emptyJobState, reduceJob, type Experiment, type GateName, type JobView, type MetricChange, type MetricSnapshot } from '../jobState.ts';
 import { Badge } from '../components/Badge.tsx';
+import { FieldCard } from '../components/FieldCard.tsx';
 import { Button } from '../components/Button.tsx';
 import { Card } from '../components/Card.tsx';
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx';
@@ -61,6 +62,13 @@ function monitorOf(job: Job | null): MonitorResult | null {
   if (!result || typeof result !== 'object' || !('monitor' in result)) return null;
   const monitor = (result as { monitor?: MonitorResult }).monitor;
   return monitor ?? null;
+}
+
+function fieldOf(result: unknown): FieldReport | null {
+  if (!result || typeof result !== 'object' || !('field' in result)) return null;
+  const field = (result as { field?: unknown }).field;
+  if (!field || typeof field !== 'object' || !('notes' in field)) return null;
+  return field as FieldReport;
 }
 
 function GateMark({ state }: { state: Experiment['gates'][number]['state'] }) {
@@ -274,6 +282,7 @@ export function JobPage() {
             {(job.status === 'queued' || job.status === 'running') && <Button variant="danger" onClick={() => setConfirming(true)}>Cancel</Button>}
           </div>
 
+          {fieldOf(job.result) && <FieldCard report={fieldOf(job.result)} />}
           {job.type === 'monitor' && (
             <Card testId="monitor-result">
               <div className="flex flex-wrap items-center gap-2">

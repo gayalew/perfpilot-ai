@@ -18,7 +18,7 @@ test('parseSpec fills defaults and rejects a bad type', () => {
   assert.equal(spec.runs, 4);
   assert.equal(spec.maxSteps, 12);
   assert.equal(spec.useAi, true);
-  assert.throws(() => parseSpec('{"type":"nope"}'), /audit, optimize, or monitor/);
+  assert.throws(() => parseSpec('{"type":"nope"}'), /audit, optimize, monitor, experiment, or field/);
 });
 
 test('buildPrBody includes the before and after table, evidence, and methodology', () => {

@@ -191,8 +191,8 @@ export function createPgStores(pool: pg.Pool): Stores {
     measurements: {
       async insert(input) {
         const result = await pool.query(
-          `INSERT INTO measurements (project_id, job_id, profile, metrics, status, compared, samples, medians)
-           VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7::jsonb,$8::jsonb) RETURNING *`,
+          `INSERT INTO measurements (project_id, job_id, profile, metrics, status, compared, samples, medians, field)
+           VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb) RETURNING *`,
           [
             input.projectId,
             input.jobId ?? null,
@@ -202,6 +202,7 @@ export function createPgStores(pool: pg.Pool): Stores {
             input.compared == null ? null : JSON.stringify(input.compared),
             input.samples == null ? null : JSON.stringify(input.samples),
             input.medians == null ? null : JSON.stringify(input.medians),
+            input.field == null ? null : JSON.stringify(input.field),
           ],
         );
         return mapMeasurement(result.rows[0]);
@@ -275,6 +276,7 @@ function mapMeasurement(row: Record<string, unknown>): Measurement {
     compared: row.compared ?? null,
     samples: row.samples ?? null,
     medians: row.medians ?? null,
+    field: row.field ?? null,
   };
 }
 

@@ -129,7 +129,9 @@ export function isQuietChange(before: number | null, after: number | null, verdi
   return Math.abs((after - before) / Math.abs(before)) * 100 < 0.5;
 }
 
-export function estimateMinutes(type: 'audit' | 'optimize' | 'monitor', runs: number, maxSteps: number): number {
+export function estimateMinutes(type: 'audit' | 'optimize' | 'monitor' | 'experiment' | 'field', runs: number, maxSteps: number): number {
+  if (type === 'field') return 2;
   if (type === 'audit' || type === 'monitor') return Math.max(2, Math.round(runs * 0.8));
+  if (type === 'experiment') return Math.max(6, Math.round(runs * 1.2 + maxSteps));
   return Math.max(8, Math.round(4 + runs * 1.5 + maxSteps * 1.2));
 }

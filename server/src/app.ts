@@ -7,6 +7,7 @@ import { ZodError, z } from 'zod';
 import { LoginLimiter, SESSION_COOKIE, passwordsMatch, readCookie, signSession, verifySession } from './auth.js';
 import type { Config } from './config.js';
 import type { EventBus } from './events.js';
+import type { GithubActionsExecutor } from './actions-executor.js';
 import type { Executor } from './executor.js';
 import type { Stores } from './repo/types.js';
 import type { Project, ProjectInput } from './types.js';
@@ -68,13 +69,13 @@ const projectSchema = projectObject.superRefine((value, ctx) => refineProject(va
 const patchSchema = projectObject.partial().superRefine((value, ctx) => refineProject(value as z.infer<typeof projectObject>, ctx, true));
 
 const jobSchema = z.object({
-  type: z.enum(['audit', 'optimize', 'monitor']),
+  type: z.enum(['audit', 'optimize', 'monitor', 'experiment', 'field']),
   runs: z.number().int().optional(),
   maxSteps: z.number().int().min(1).max(12).optional(),
   useAi: z.boolean().optional(),
   onlyFixes: z.array(z.string().min(1)).max(12).optional(),
 }).superRefine((value, ctx) => {
-  if (value.runs === undefined) return;
+  if (value.type === 'field' || value.runs === undefined) return;
   const min = value.type === 'monitor' ? 3 : 4;
   if (value.runs < min || value.runs > 10) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['runs'], message: `runs must be from ${min} to 10` });
 });
@@ -90,6 +91,12 @@ export interface AppDeps {
   runDue?: () => Promise<string[]>;
   jobSecret?: string;
   monitorMinHistory?: number;
+  actions?: GithubActionsExecutor;
+}
+
+function authorized(req: Request, secret: string | undefined): boolean {
+  if (!secret) return false;
+  return passwordsMatch(req.header('x-job-secret') ?? '', secret);
 }
 
 function cookieFlags(config: AppDeps['config']): { sameSite: 'lax' | 'none'; secure: boolean } {
@@ -171,6 +178,42 @@ export function createApp(deps: AppDeps): express.Express {
     res.json({ enqueued });
   }));
 
+  app.get('/api/internal/jobs/:id/spec', asyncRoute(async (req, res) => {
+    if (!authorized(req, deps.jobSecret)) {
+      res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+    const job = await stores.jobs.get(String(req.params.id));
+    const project = job ? await stores.projects.get(job.projectId) : null;
+    if (!job || !project || !deps.actions) {
+      res.status(404).json({ error: 'job not found' });
+      return;
+    }
+    res.json(deps.actions.spec(job, project));
+  }));
+
+  app.post('/api/internal/jobs/:id/events', asyncRoute(async (req, res) => {
+    if (!authorized(req, deps.jobSecret)) {
+      res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+    if (!deps.actions) {
+      res.status(404).json({ error: 'job not found' });
+      return;
+    }
+    const body = (req.body ?? {}) as { type?: unknown; payload?: unknown };
+    if (typeof body.type !== 'string') {
+      res.status(400).json({ error: 'type is required' });
+      return;
+    }
+    const result = await deps.actions.ingest(String(req.params.id), body.type, body.payload ?? {});
+    if (result === 'missing') {
+      res.status(404).json({ error: 'job not found' });
+      return;
+    }
+    res.json({ ok: true, result });
+  }));
+
   app.use('/api', (req, res, next) => {
     if (req.path === '/health' || req.path === '/login') return next();
     const token = readCookie(req.header('cookie'), SESSION_COOKIE);
@@ -244,11 +287,19 @@ export function createApp(deps: AppDeps): express.Express {
       res.status(400).json({ error: 'optimize requires a repo project' });
       return;
     }
+    if (parsed.type === 'experiment' && project.mode !== 'url') {
+      res.status(400).json({ error: 'experiment requires a URL project' });
+      return;
+    }
+    if ((parsed.type === 'experiment' || parsed.type === 'field') && !project.url) {
+      res.status(400).json({ error: 'the project needs a URL' });
+      return;
+    }
     const job = await stores.jobs.create({
       projectId: project.id,
       type: parsed.type,
       params: {
-        runs: parsed.runs ?? (parsed.type === 'monitor' ? 5 : 4),
+        runs: parsed.runs ?? (parsed.type === 'monitor' ? 5 : parsed.type === 'field' ? 1 : 4),
         maxSteps: parsed.maxSteps ?? 12,
         useAi: parsed.useAi ?? true,
         ...(parsed.onlyFixes ? { onlyFixes: parsed.onlyFixes } : {}),
@@ -271,6 +322,16 @@ export function createApp(deps: AppDeps): express.Express {
     }
     const rows = (await stores.measurements.listByProject(project.id)).filter((row) => row.samples);
     res.json(rows.slice(-parsed.data));
+  }));
+
+  app.get('/api/projects/:id/field', asyncRoute(async (req, res) => {
+    const project = await stores.projects.get(String(req.params.id));
+    if (!project) {
+      res.status(404).json({ error: 'project not found' });
+      return;
+    }
+    const rows = (await stores.measurements.listByProject(project.id)).filter((row) => row.profile === 'field' && row.field);
+    res.json(rows.at(-1)?.field ?? null);
   }));
 
   app.get('/api/projects/:id/incidents', asyncRoute(async (req, res) => {
