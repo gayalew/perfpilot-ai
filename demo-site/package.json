@@ -1,0 +1,14 @@
+{
+  "name": "perfpilot-demo-site",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A deliberately slow coffee shop landing page, used to demonstrate PerfPilot AI",
+  "scripts": {
+    "start": "node server.mjs",
+    "build": "echo \"static site, nothing to build\"",
+    "test": "node scripts/smoke.mjs",
+    "gen-assets": "node scripts/gen-assets.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

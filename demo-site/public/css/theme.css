@@ -1,0 +1,5 @@
+/* theme.css: colors and accents. Also render-blocking. */
+h1, h2 { letter-spacing: .01em; }
+h2 { border-left: 4px solid #b5651d; padding-left: 10px; }
+.promo { background: #b5651d; color: #fff; padding: 14px 20px; text-align: center; font-weight: 600; }
+a:hover { color: #b5651d; }

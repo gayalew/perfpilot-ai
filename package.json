@@ -1,15 +1,12 @@
 {
-  "name": "perfpilot_ai",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "perfpilot-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PerfPilot AI: an autonomous web performance engineer",
+  "workspaces": ["worker", "server", "client"],
+  "engines": { "node": ">=20.6" },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "pg": "^8.23.1"
+    "test": "npm run test --workspace worker",
+    "check-env": "node --env-file=.env check-env.mjs"
   }
 }
