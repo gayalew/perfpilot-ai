@@ -10,7 +10,7 @@ import { formatMetric, type MetricKey } from './metrics.js';
 import { aggregate, measureInterleaved, measureUrl, type Aggregate, type Measurement } from './measure.js';
 import { runLighthouseOnce } from './lighthouse-runner.js';
 import { compareMeasurements, type Comparison, type MetricComparison } from './compare.js';
-import { addWorktree, changedFiles, commitAll, headSha, prepareWorkdir, removeWorktree, resetHard } from './repo.js';
+import { addWorktree, changedFiles, commitAll, git, headSha, prepareInplace, prepareWorkdir, removeWorktree, resetHard } from './repo.js';
 import { startSite, type RunningSite } from './site-runner.js';
 
 export type StepStatus = 'kept' | 'reverted' | 'skipped' | 'error';
@@ -23,6 +23,13 @@ export interface StepMetric {
   p: number;
 }
 
+export interface RegressionNote {
+  key: MetricKey;
+  before: number;
+  after: number;
+  harm: boolean;
+}
+
 export interface LedgerStep {
   order: number;
   fix: string;
@@ -33,6 +40,9 @@ export interface LedgerStep {
   commit?: string;
   gates: GateResult[];
   metrics: StepMetric[];
+  /** 1, or 2 when an AI edit was repaired once. */
+  attempts?: number;
+  regressions?: RegressionNote[];
 }
 
 export interface Ledger {
@@ -45,6 +55,61 @@ export interface Ledger {
   final: Aggregate | null;
   finalComparison: Comparison | null;
   steps: LedgerStep[];
+  runs?: number;
+  finalRuns?: number;
+  branch?: string;
+}
+
+/** Core Web Vitals "good" ceilings. A regression counts as harm only in the cases documented on judgePerformance. */
+export const CWV_GOOD = { lcp: 2500, tbt: 200, cls: 0.1 } as const;
+
+const HARM_KEYS = new Set<MetricKey>(['lcp', 'tbt', 'cls']);
+
+/** Whether a statistically regressed metric is harmful enough to reject the fix. */
+export function regressionCountsAsHarm(metric: MetricComparison): boolean {
+  if (metric.verdict !== 'regressed') return false;
+  if (metric.key === 'score') return true;
+  if (!HARM_KEYS.has(metric.key)) return false;
+  const limit = CWV_GOOD[metric.key as keyof typeof CWV_GOOD];
+  const before = metric.baselineMedian;
+  const after = metric.candidateMedian;
+  if (before <= limit && after > limit) return true;
+  if (before > limit) {
+    const base = Math.abs(before);
+    if (base === 0) return after > before;
+    return (after - before) / base > 0.1;
+  }
+  return false;
+}
+
+export interface PerformanceDecision {
+  passed: boolean;
+  details: string;
+  regressions: RegressionNote[];
+}
+
+/**
+ * The performance gate passes when at least one primary metric improved and no regression counts as harm.
+ * Statistical thresholds stay in compare.ts. This only decides which regressions block a keep.
+ */
+export function judgePerformance(comparison: Comparison): PerformanceDecision {
+  const regressions = comparison.metrics
+    .filter((metric) => metric.verdict === 'regressed')
+    .map((metric) => ({
+      key: metric.key,
+      before: metric.baselineMedian,
+      after: metric.candidateMedian,
+      harm: regressionCountsAsHarm(metric),
+    }));
+  const improved = comparison.metrics.some((metric) => metric.primary && metric.verdict === 'improved');
+  const harms = regressions.filter((metric) => metric.harm);
+  const passed = improved && harms.length === 0;
+  const ignored = regressions.filter((metric) => !metric.harm).map((metric) => metric.key);
+  let details = comparison.summary;
+  if (passed && ignored.length) details = `${comparison.summary} (ignored regressions: ${ignored.join(', ')})`;
+  if (!passed && harms.length) details = `harm: ${harms.map((metric) => metric.key).join(', ')} (${comparison.summary})`;
+  if (!passed && !improved) details = `${comparison.verdict}: ${comparison.summary}`;
+  return { passed, details, regressions };
 }
 
 export type OptimizeEvent =
@@ -60,6 +125,8 @@ export interface OptimizeOptions {
   finalRuns?: number;
   maxSteps?: number;
   useAi?: boolean;
+  /** Use repoPath itself, keeping its git history, instead of copying into a fresh repo. */
+  inplace?: boolean;
   runDir: string;
   onEvent?: (event: OptimizeEvent) => void;
   deps?: Partial<OptimizeDeps>;
@@ -83,6 +150,8 @@ export interface OptimizeResult {
   ledger: Ledger;
   summary: string;
   elapsedMs: number;
+  branch: string;
+  workDir: string;
 }
 
 const realDeps: OptimizeDeps = {
@@ -125,6 +194,23 @@ function metricText(step: LedgerStep): string {
   return keyMetric(step.metrics, comparison);
 }
 
+const REPORT_ROWS: { key: MetricKey; label: string }[] = [
+  { key: 'score', label: 'score' },
+  { key: 'lcp', label: 'LCP' },
+  { key: 'fcp', label: 'FCP' },
+  { key: 'tbt', label: 'TBT' },
+  { key: 'cls', label: 'CLS' },
+  { key: 'speedIndex', label: 'Speed Index' },
+  { key: 'totalBytes', label: 'page weight' },
+  { key: 'requests', label: 'requests' },
+];
+
+function changePct(before: number, after: number): string {
+  if (!Number.isFinite(before) || before === 0) return 'n/a';
+  const pct = ((after - before) / Math.abs(before)) * 100;
+  return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+}
+
 export function formatSummary(ledger: Ledger): string {
   const lines = [
     '# PerfPilot optimize',
@@ -143,12 +229,73 @@ export function formatSummary(ledger: Ledger): string {
     lines.push(`| ${step.order} | ${step.fix} | ${step.status} | ${reason} | ${metricText(step)} |`);
   }
   lines.push('');
+  lines.push('## Before and after');
+  lines.push('');
+  lines.push('| Metric | Before | After | Change |');
+  lines.push('| --- | --- | --- | --- |');
+  for (const { key, label } of REPORT_ROWS) {
+    const before = ledger.baseline?.[key]?.median;
+    const after = ledger.final?.[key]?.median;
+    if (before === undefined || after === undefined || before === null || after === null) {
+      lines.push(`| ${label} | n/a | n/a | n/a |`);
+    } else {
+      lines.push(`| ${label} | ${formatMetric(key, before)} | ${formatMetric(key, after)} | ${changePct(before, after)} |`);
+    }
+  }
+  lines.push('');
+  const kept = ledger.steps.filter((step) => step.status === 'kept');
+  if (kept.length) {
+    lines.push('## Kept changes');
+    lines.push('');
+    for (const step of kept) {
+      const comparison = step.gates.find((gate) => gate.name === 'performance')?.comparison;
+      const improved = comparison?.metrics.filter((metric) => metric.verdict === 'improved') ?? [];
+      const runs = comparison?.metrics[0];
+      lines.push(`### ${step.fix}`);
+      lines.push('');
+      if (!improved.length) {
+        lines.push('No metric was marked improved.');
+      }
+      for (const metric of improved) {
+        const p = Math.min(metric.pBetter, metric.pWorse);
+        lines.push(`- ${metric.label}: ${formatMetric(metric.key, metric.baselineMedian)} -> ${formatMetric(metric.key, metric.candidateMedian)} (p=${p.toFixed(3)}, ${metric.baselineN} runs per side)`);
+      }
+      if (runs) lines.push(`- Runs per side: ${runs.baselineN}`);
+      lines.push('');
+    }
+  }
   if (ledger.finalComparison) {
     lines.push('## Final comparison');
     lines.push('');
     lines.push(ledger.finalComparison.summary);
     lines.push('');
   }
+  lines.push('## Methodology');
+  lines.push('');
+  lines.push('Runs are interleaved. Each metric is compared with a one-sided Mann-Whitney U test and must also clear a minimum effect size and the baseline noise floor.');
+  lines.push(`Performance checks used ${ledger.runs ?? 4} runs per side. The final comparison used ${ledger.finalRuns ?? 5} runs per side.`);
+  lines.push('The tool never merges.');
+  lines.push('');
+  return lines.join('\n');
+}
+
+/** Pull request body. Same numbers as summary.md, plus the keep/revert evidence. */
+export function buildPrBody(ledger: Ledger): string {
+  const kept = ledger.steps.filter((step) => step.status === 'kept');
+  const reverted = ledger.steps.filter((step) => step.status === 'reverted' || step.status === 'error');
+  const lines = [
+    `# PerfPilot: ${kept.length} proven performance improvement${kept.length === 1 ? '' : 's'}`,
+    '',
+    formatSummary(ledger),
+    '## Reverted changes',
+    '',
+  ];
+  if (!reverted.length) lines.push('None.');
+  for (const step of reverted) {
+    const harm = (step.regressions ?? []).filter((metric) => metric.harm).map((metric) => metric.key).join(', ');
+    lines.push(`- ${step.fix}: ${step.reason.replace(/\n/g, ' ')}${harm ? ` (harm: ${harm})` : ''}`);
+  }
+  lines.push('');
   return lines.join('\n');
 }
 
@@ -193,8 +340,8 @@ export async function optimize(options: OptimizeOptions): Promise<OptimizeResult
   await writeFile(eventsFile, '');
 
   const repoPath = path.resolve(options.repoPath);
-  const config = await deps.loadSiteConfig(repoPath);
-  const prepared = await deps.prepareWorkdir(repoPath, runDir);
+  const config = await deps.loadSiteConfig(options.inplace ? repoPath : repoPath);
+  const prepared = options.inplace ? await prepareInplace(repoPath) : await deps.prepareWorkdir(repoPath, runDir);
   const { workDir, baselineSha } = prepared;
   const baselinePort = config.port;
   const candidatePort = config.port + 1;
@@ -265,6 +412,9 @@ export async function optimize(options: OptimizeOptions): Promise<OptimizeResult
     final: finalAggregate,
     finalComparison,
     steps,
+    runs,
+    finalRuns,
+    branch: prepared.branch,
   };
   const summary = formatSummary(ledger) + (finalError ? `\nFinal comparison failed: ${finalError}\n` : '');
   await writeFile(path.join(runDir, 'ledger.json'), JSON.stringify(ledger, null, 2));
@@ -274,7 +424,17 @@ export async function optimize(options: OptimizeOptions): Promise<OptimizeResult
   const skipped = steps.filter((step) => step.status === 'skipped').length;
   const errored = steps.filter((step) => step.status === 'error').length;
   await emit(options, eventsFile, { type: 'run-end', kept, reverted, skipped, errored });
-  return { runDir, ledger, summary, elapsedMs: Date.now() - started };
+  return { runDir, ledger, summary, elapsedMs: Date.now() - started, branch: prepared.branch, workDir };
+}
+
+/** A worktree of the git root, plus the site directory inside it when the site is not the repo root. */
+async function locateSite(workDir: string, folder: string): Promise<{ gitDir: string; treeRoot: string; siteDir: string }> {
+  const shown = await git(workDir, ['rev-parse', '--show-toplevel']);
+  if (shown.code !== 0) throw new Error(shown.stderr.trim() || 'git root not found');
+  const gitDir = path.resolve(shown.stdout.trim());
+  const rel = path.relative(gitDir, path.resolve(workDir));
+  const treeRoot = path.join(path.dirname(gitDir), folder);
+  return { gitDir, treeRoot, siteDir: rel ? path.join(treeRoot, rel) : treeRoot };
 }
 
 async function compareEnds(
@@ -286,18 +446,18 @@ async function compareEnds(
   candidatePort: number,
   runs: number,
 ): Promise<[Measurement, Measurement]> {
-  const tree = path.join(path.dirname(workDir), 'original');
-  await addWorktree(workDir, tree, baselineSha);
+  const located = await locateSite(workDir, 'original');
+  await addWorktree(located.gitDir, located.treeRoot, baselineSha);
   const sites: RunningSite[] = [];
   try {
-    const base = await deps.startSite(tree, config, baselinePort);
+    const base = await deps.startSite(located.siteDir, config, baselinePort);
     sites.push(base);
     const candidate = await deps.startSite(workDir, config, candidatePort);
     sites.push(candidate);
     return await deps.measureInterleaved(base.url, candidate.url, { runs, profile: 'mobile', onProgress: () => undefined });
   } finally {
     await stopAll(sites);
-    await removeWorktree(workDir, tree);
+    await removeWorktree(located.gitDir, located.treeRoot);
   }
 }
 
@@ -317,6 +477,19 @@ interface StepInput {
   ai: AiEditor;
 }
 
+function siteFailureMessage(err: unknown): string | undefined {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/site did not return|install failed|build failed|startCommand is empty|EADDRINUSE/i.test(message)) return message;
+  return undefined;
+}
+
+function applyPerformancePolicy(result: GateResult): void {
+  if (result.name !== 'performance' || !result.comparison) return;
+  const decision = judgePerformance(result.comparison);
+  result.passed = decision.passed;
+  result.details = decision.details;
+}
+
 async function runStep(input: StepInput): Promise<LedgerStep> {
   const blank = (status: StepStatus, reason: string, extra: Partial<LedgerStep> = {}): LedgerStep => ({
     order: input.order,
@@ -334,75 +507,118 @@ async function runStep(input: StepInput): Promise<LedgerStep> {
   const applier = (input.deps.applierFor ?? applierFor)(input.finding.fix);
   if (!applier) return blank('skipped', 'no applier');
 
-  let files: string[] = [];
-  try {
-    const applied = await applier.apply({ dir: input.workDir, config: input.config, finding: input.finding, ai: input.ai });
-    files = applied.changedFiles.length ? applied.changedFiles : await changedFiles(input.workDir).catch(() => []);
-    if (!applied.applied) return blank('skipped', applied.skippedReason ?? 'not applied', { files });
-  } catch (err) {
-    await resetHard(input.workDir).catch(() => undefined);
-    return blank('error', err instanceof Error ? err.message : String(err));
-  }
+  type Outcome =
+    | { kind: 'skipped'; reason: string; files: string[] }
+    | { kind: 'gates'; files: string[]; gates: GateResult[] }
+    | { kind: 'site'; files: string[]; message: string };
 
-  const tree = path.join(path.dirname(input.workDir), 'baseline');
-  const sites: RunningSite[] = [];
-  try {
-    const sha = await headSha(input.workDir);
-    await addWorktree(input.workDir, tree, sha);
-    const base = await input.deps.startSite(tree, input.config, input.baselinePort);
-    sites.push(base);
-    const candidate = await input.deps.startSite(input.workDir, input.config, input.candidatePort);
-    sites.push(candidate);
-    const gates: GateResult[] = [];
-    const gateCtx: GateContext = {
-      baselineUrl: base.url,
-      candidateUrl: candidate.url,
-      candidateDir: input.workDir,
-      config: input.config,
-      fix: input.finding.fix,
-      runs: input.runs,
-      measureInterleaved: input.deps.measureInterleaved,
-      onGate: async (phase, name, result) => {
-        if (phase === 'start') {
-          await emit(input.options, input.eventsFile, { type: 'gate-start', order: input.order, fix: input.fix, gate: name });
-          return;
-        }
-        if (result) {
-          await emit(input.options, input.eventsFile, {
-            type: 'gate-end',
-            order: input.order,
-            fix: input.fix,
-            gate: result.name,
-            passed: result.passed,
-            details: result.details,
-            ms: result.ms,
-          });
-        }
-      },
-    };
-    gates.push(...(await input.deps.runGates(gateCtx)));
-    await stopAll(sites);
-    sites.length = 0;
-    await removeWorktree(input.workDir, tree);
-
+  const finish = async (outcome: Outcome, attempts: number): Promise<LedgerStep> => {
+    if (outcome.kind === 'skipped') return blank('skipped', outcome.reason, { files: outcome.files, attempts });
+    const gates = outcome.kind === 'site'
+      ? [{ name: 'smoke' as const, passed: false, details: outcome.message.slice(0, 1500), ms: 0 }]
+      : outcome.gates;
     const failed = gates.find((gate) => !gate.passed && gate.details !== 'not run');
     const performance = gates.find((gate) => gate.name === 'performance');
+    const regressions = performance?.comparison ? judgePerformance(performance.comparison).regressions : [];
     if (!failed) {
       const message = `perfpilot: ${input.title}\n\n${evidence(input.title, gates)}`;
       const commit = await commitAll(input.workDir, message);
       return blank('kept', performance?.comparison?.summary ?? 'all gates passed', {
-        files,
+        files: outcome.files,
         commit,
         gates,
         metrics: metricsOf(performance?.comparison),
+        attempts,
+        regressions,
       });
     }
     await resetHard(input.workDir);
-    return blank('reverted', `${failed.name}: ${failed.details}`, { files, gates, metrics: metricsOf(performance?.comparison) });
+    return blank('reverted', `${failed.name}: ${failed.details}`, {
+      files: outcome.files,
+      gates,
+      metrics: metricsOf(performance?.comparison),
+      attempts,
+      regressions,
+    });
+  };
+
+  const attempt = async (repairReason?: string): Promise<Outcome> => {
+    let files: string[] = [];
+    const applied = await applier.apply({
+      dir: input.workDir,
+      config: input.config,
+      finding: input.finding!,
+      ai: input.ai,
+      repairReason,
+    });
+    files = applied.changedFiles.length ? applied.changedFiles : await changedFiles(input.workDir).catch(() => []);
+    if (!applied.applied) return { kind: 'skipped', reason: applied.skippedReason ?? 'not applied', files };
+
+    const located = await locateSite(input.workDir, 'baseline');
+    const sites: RunningSite[] = [];
+    try {
+      const sha = await headSha(input.workDir);
+      await addWorktree(located.gitDir, located.treeRoot, sha);
+      const base = await input.deps.startSite(located.siteDir, input.config, input.baselinePort);
+      sites.push(base);
+      const candidate = await input.deps.startSite(input.workDir, input.config, input.candidatePort);
+      sites.push(candidate);
+      const gateCtx: GateContext = {
+        baselineUrl: base.url,
+        candidateUrl: candidate.url,
+        candidateDir: input.workDir,
+        config: input.config,
+        fix: input.finding!.fix,
+        runs: input.runs,
+        measureInterleaved: input.deps.measureInterleaved,
+        onGate: async (phase, name, result) => {
+          if (result) applyPerformancePolicy(result);
+          if (phase === 'start') {
+            await emit(input.options, input.eventsFile, { type: 'gate-start', order: input.order, fix: input.fix, gate: name });
+            return;
+          }
+          if (result) {
+            await emit(input.options, input.eventsFile, {
+              type: 'gate-end',
+              order: input.order,
+              fix: input.fix,
+              gate: result.name,
+              passed: result.passed,
+              details: result.details,
+              ms: result.ms,
+            });
+          }
+        },
+      };
+      const gates = await input.deps.runGates(gateCtx);
+      for (const gate of gates) applyPerformancePolicy(gate);
+      return { kind: 'gates', files, gates };
+    } catch (err) {
+      const site = siteFailureMessage(err);
+      if (site) return { kind: 'site', files, message: site };
+      throw err;
+    } finally {
+      await stopAll(sites);
+      await removeWorktree(located.gitDir, located.treeRoot).catch(() => undefined);
+    }
+  };
+
+  try {
+    const first = await attempt();
+    if (first.kind === 'skipped') return blank('skipped', first.reason, { files: first.files, attempts: 1 });
+    const failed = first.kind === 'site' || first.gates.some((gate) => !gate.passed && gate.details !== 'not run');
+    if (failed && applier.kind === 'ai') {
+      await resetHard(input.workDir);
+      const reason = (first.kind === 'site' ? first.message : first.gates.find((gate) => !gate.passed && gate.details !== 'not run')?.details ?? 'gate failed').slice(0, 1500);
+      const second = await attempt(reason);
+      if (second.kind === 'skipped') {
+        return blank('reverted', second.reason, { files: second.files, attempts: 2 });
+      }
+      return await finish(second, 2);
+    }
+    return await finish(first, 1);
   } catch (err) {
-    await stopAll(sites);
-    await removeWorktree(input.workDir, tree).catch(() => undefined);
     await resetHard(input.workDir).catch(() => undefined);
-    return blank('error', err instanceof Error ? err.message : String(err), { files });
+    return blank('error', err instanceof Error ? err.message : String(err));
   }
 }

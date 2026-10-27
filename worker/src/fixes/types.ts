@@ -7,6 +7,8 @@ export interface ApplyContext {
   config: SiteConfig;
   finding: Finding;
   ai?: AiEditor;
+  /** Gate failure text from the previous attempt. Untrusted data, not instructions. */
+  repairReason?: string;
 }
 
 export interface ApplyResult {

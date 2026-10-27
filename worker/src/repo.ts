@@ -39,6 +39,30 @@ async function gitOk(cwd: string, args: string[]): Promise<string> {
  * Copies a site into runDir/work, then makes a fresh git repo there.
  * The original tree is never modified, even when it is already a git root.
  */
+export function branchStamp(date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}-${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}`;
+}
+
+/**
+ * Checks out a new optimize branch in an existing clone.
+ * Does not copy the tree and does not change the remote URL or global git config.
+ */
+export async function prepareInplace(repoPath: string, date = new Date()): Promise<{ workDir: string; branch: string; baselineSha: string }> {
+  const workDir = path.resolve(repoPath);
+  await gitOk(workDir, ['config', 'user.name', 'PerfPilot']);
+  await gitOk(workDir, ['config', 'user.email', 'perfpilot@users.noreply.github.com']);
+  const baselineSha = await gitOk(workDir, ['rev-parse', 'HEAD']);
+  const branch = `perfpilot/optimize-${branchStamp(date)}`;
+  const created = await git(workDir, ['checkout', '-b', branch]);
+  if (created.code !== 0) {
+    const fallback = `${branch}-${date.getUTCSeconds()}`;
+    await gitOk(workDir, ['checkout', '-b', fallback]);
+    return { workDir, branch: fallback, baselineSha };
+  }
+  return { workDir, branch, baselineSha };
+}
+
 export async function prepareWorkdir(repoPath: string, runDir: string): Promise<{ workDir: string; branch: string; baselineSha: string }> {
   const source = path.resolve(repoPath);
   const workDir = path.join(path.resolve(runDir), 'work');

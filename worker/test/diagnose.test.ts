@@ -125,18 +125,18 @@ test('planFixes falls back without a key, on HTTP errors, and on garbage replies
   const findings = extractFindings(lhr);
   assert.equal((await planFixes(findings, { apiKey: '', model: 'm' })).source, 'heuristic');
   const quota = (async () => new Response('{}', { status: 429 })) as typeof fetch;
-  const limited = await planFixes(findings, { apiKey: 'k', model: 'm', fetchImpl: quota });
+  const limited = await planFixes(findings, { apiKey: 'k', model: 'm', fetchImpl: quota, sleep: async () => undefined });
   assert.equal(limited.source, 'heuristic');
   assert.match(limited.note ?? '', /quota/);
   const garbage = await planFixes(findings, { apiKey: 'k', model: 'm', fetchImpl: reply('not json') });
   assert.equal(garbage.source, 'heuristic');
   const thrown = (async () => { throw new Error('network down'); }) as typeof fetch;
-  assert.equal((await planFixes(findings, { apiKey: 'k', model: 'm', fetchImpl: thrown })).source, 'heuristic');
+  assert.equal((await planFixes(findings, { apiKey: 'k', model: 'm', fetchImpl: thrown, sleep: async () => undefined })).source, 'heuristic');
 });
 
 test('planFixes never sends the api key in the body or url', async () => {
   let seenUrl = '', seenBody = '';
   const spy = (async (url: string, init: RequestInit) => { seenUrl = url; seenBody = String(init.body); return new Response('{}', { status: 500 }); }) as unknown as typeof fetch;
-  await planFixes(extractFindings(lhr), { apiKey: 'SECRET123', model: 'm', fetchImpl: spy });
+  await planFixes(extractFindings(lhr), { apiKey: 'SECRET123', model: 'm', fetchImpl: spy, sleep: async () => undefined });
   assert.ok(!seenUrl.includes('SECRET123') && !seenBody.includes('SECRET123'));
 });

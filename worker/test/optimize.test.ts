@@ -166,4 +166,60 @@ test('optimize keeps, reverts, skips, and records an error without stopping', as
   const summary = await readFile(path.join(runDir, 'summary.md'), 'utf8');
   assert.match(summary, /defer-scripts/);
   assert.match(summary, /kept/);
+  assert.match(summary, /Before and after/);
+});
+
+test('an AI edit gets one repair, and a crashed candidate is a reverted smoke gate', async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), 'perfpilot-repair-src-'));
+  await mkdir(path.join(repo, 'public'), { recursive: true });
+  await writeFile(path.join(repo, 'public', 'index.html'), '<!doctype html><html><body>Hi</body></html>', 'utf8');
+  const findings = [finding('compress-text')];
+  const plan: Plan = {
+    source: 'gemini',
+    steps: [{ fix: 'compress-text', auditId: 'compress-text', rationale: 'compress', expectedImpact: 'bytes', order: 1 }],
+  };
+  let applies = 0;
+  const aiApplier: FixApplier = {
+    id: 'compress-text',
+    kind: 'ai',
+    apply: async ({ dir, repairReason }) => {
+      applies += 1;
+      if (applies === 2) assert.match(repairReason ?? '', /site did not return 200/);
+      await writeFile(path.join(dir, 'public', 'index.html'), `<!doctype html><html><body>try ${applies}</body></html>`, 'utf8');
+      return { applied: true, changedFiles: ['public/index.html'] };
+    },
+  };
+  const runDir = await mkdtemp(path.join(tmpdir(), 'perfpilot-repair-run-'));
+  const result = await optimize({
+    repoPath: repo,
+    runs: 4,
+    finalRuns: 5,
+    maxSteps: 1,
+    useAi: true,
+    runDir,
+    deps: {
+      measureUrl: async () => measurement('http://127.0.0.1:4782/'),
+      measureInterleaved: async () => [measurement('http://127.0.0.1:4782/'), measurement('http://127.0.0.1:4783/')],
+      runLighthouseOnce: async () => ({}) as never,
+      extractFindings: () => findings,
+      planFixes: async () => plan,
+      startSite: async (_dir, _config, port) => {
+        if (port === 4783 && applies === 1) throw new Error('site did not return 200');
+        return { url: `http://127.0.0.1:${port}/`, stop: async () => undefined };
+      },
+      runGates: async (ctx) => {
+        const results = gates(true);
+        for (const gate of results) {
+          await ctx.onGate?.('start', gate.name);
+          await ctx.onGate?.('end', gate.name, gate);
+        }
+        return results;
+      },
+      loadSiteConfig: async () => validateSiteConfig({ startCommand: 'node server.mjs', port: 4782, paths: ['/'], publicDir: 'public', serverFile: 'server.mjs' }),
+      applierFor: () => aiApplier,
+    },
+  });
+  assert.equal(applies, 2);
+  assert.equal(result.ledger.steps[0]?.status, 'kept');
+  assert.equal(result.ledger.steps[0]?.attempts, 2);
 });

@@ -9,6 +9,8 @@ export interface GeminiOptions {
   timeoutMs?: number;
   /** Maximum number of steps to keep. */
   maxSteps?: number;
+  /** Injectable so tests do not wait out the backoff. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const SYSTEM_PROMPT = `You are a senior web performance engineer. You receive findings from a Lighthouse run of one web page.
@@ -78,8 +80,35 @@ export function validatePlan(raw: unknown, findings: Finding[], maxSteps = 8): P
   return out;
 }
 
+const RETRY_BACKOFF_MS = [1000, 3000];
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function retryableStatus(status: number): boolean {
+  return status === 429 || status === 500 || status === 503;
+}
+
+/** Waits for Retry-After when the server sends one, otherwise 1s then 3s. */
+export function retryDelayMs(attempt: number, headers?: { get(name: string): string | null }): number {
+  const header = headers?.get('retry-after');
+  if (header) {
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 30_000);
+    const when = Date.parse(header);
+    if (!Number.isNaN(when)) return Math.min(Math.max(0, when - Date.now()), 30_000);
+  }
+  return RETRY_BACKOFF_MS[attempt] ?? 3000;
+}
+
+function statusError(status: number): Error {
+  return new Error(status === 429 ? 'free quota reached' : `HTTP ${status}`);
+}
+
 /**
- * One Gemini generateContent call. The API key is sent as a header, never in the URL or body.
+ * One Gemini generateContent call, retried up to three attempts on 429, 500, 503, and network errors.
+ * The API key is sent as a header, never in the URL or body.
  * Throws a short error that does not include the key. Callers decide how to recover.
  */
 export async function geminiGenerate(system: string, user: string, options: GeminiOptions = {}): Promise<string> {
@@ -89,27 +118,40 @@ export async function geminiGenerate(system: string, user: string, options: Gemi
   if (!model) throw new Error('GEMINI_MODEL is not set');
 
   const doFetch = options.fetchImpl ?? fetch;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000);
-  try {
-    const res = await doFetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: 'user', parts: [{ text: user }] }],
-        generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      throw new Error(res.status === 429 ? 'free quota reached' : `HTTP ${res.status}`);
+  const sleep = options.sleep ?? defaultSleep;
+  let last: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000);
+    try {
+      const res = await doFetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [{ role: 'user', parts: [{ text: user }] }],
+          generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        last = statusError(res.status);
+        if (!retryableStatus(res.status) || attempt === 2) throw last;
+        await sleep(retryDelayMs(attempt, res.headers));
+        continue;
+      }
+      const body = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+      return body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+    } catch (err) {
+      if (err instanceof Error && (/^HTTP \d+$/.test(err.message) || err.message === 'free quota reached')) throw err;
+      last = err instanceof Error ? err : new Error('network error');
+      if (attempt === 2) throw last;
+      await sleep(retryDelayMs(attempt));
+    } finally {
+      clearTimeout(timer);
     }
-    const body = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-    return body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
-  } finally {
-    clearTimeout(timer);
   }
+  throw last instanceof Error ? last : new Error('Gemini call failed');
 }
 
 /**
