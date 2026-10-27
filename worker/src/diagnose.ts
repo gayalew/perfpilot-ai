@@ -91,6 +91,7 @@ const AUDITS: Record<string, AuditDef> = {
   'layout-shifts': { fix: 'reserve-space', metrics: ['cls'], weight: 1.5 },
   'layout-shift-elements': { fix: 'reserve-space', metrics: ['cls'], weight: 1.5 },
   'prioritize-lcp-image': { fix: 'preload-lcp-image', metrics: ['lcp'], weight: 1.2 },
+  'lcp-lazy-loaded': { fix: 'preload-lcp-image', metrics: ['lcp'], weight: 1.2 },
   'unminified-javascript': { fix: 'minify-assets', metrics: ['fcp', 'tbt'] },
   'unminified-css': { fix: 'minify-assets', metrics: ['fcp'] },
   'unused-javascript': { fix: 'remove-unused-code', metrics: ['lcp', 'tbt'] },

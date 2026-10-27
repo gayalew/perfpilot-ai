@@ -1,5 +1,7 @@
 /* theme.css: colors and accents. Also render-blocking. */
 h1, h2 { letter-spacing: .01em; }
 h2 { border-left: 4px solid #b5651d; padding-left: 10px; }
-.promo { background: #b5651d; color: #fff; padding: 14px 20px; text-align: center; font-weight: 600; }
+.promo { background: #b5651d; color: #fff; min-height: 156px; padding: 24px 20px; text-align: center; font-weight: 600; display: flex; align-items: center; justify-content: center; line-height: 1.4; }
+.journal { background: linear-gradient(180deg, rgba(181, 101, 29, 0.08), transparent 280px), repeating-linear-gradient(180deg, transparent 0 120px, rgba(43, 33, 27, 0.045) 120px 121px); }
+.entries h3 { color: #6b3e12; }
 a:hover { color: #b5651d; }

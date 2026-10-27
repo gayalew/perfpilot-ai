@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "PerfPilot AI: an autonomous web performance engineer",
-  "workspaces": ["worker", "server", "client"],
+  "workspaces": ["worker", "server", "client", "demo-site"],
   "engines": { "node": ">=20.6" },
   "scripts": {
     "test": "npm run test --workspace worker",

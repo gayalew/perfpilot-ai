@@ -4,12 +4,18 @@ body { margin: 0; font-family: system-ui, sans-serif; color: #2b211b; background
 .top { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; background: #2b211b; color: #fbf7f2; }
 .top nav a { color: #e8d5c0; margin-left: 14px; text-decoration: none; }
 .hero { position: relative; }
-.hero img { width: 100%; display: block; }
+.hero img { width: 100%; display: block; aspect-ratio: 16 / 9; }
 .hero-text { position: absolute; left: 24px; bottom: 24px; color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,.6); }
 .hero-text h1 { margin: 0 0 6px; font-size: 2rem; }
 section { padding: 28px 20px; }
 .menu ul { list-style: none; padding: 0; max-width: 420px; }
 .menu li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e3d6c6; }
+.journal { min-height: 3800px; }
+.lede { max-width: 38rem; line-height: 1.5; }
+.entries { list-style: none; padding: 0; margin: 0; max-width: 40rem; }
+.entries li { padding: 16px 0 18px; border-bottom: 1px solid #e3d6c6; }
+.entries h3 { margin: 0 0 6px; font-size: 1.05rem; }
+.entries p { margin: 0; line-height: 1.5; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .grid img { width: 100%; }
 footer { padding: 20px; text-align: center; background: #2b211b; color: #e8d5c0; }

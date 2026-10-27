@@ -31,6 +31,43 @@ test('extractFindings keeps failed audits and drops passing or inapplicable ones
   assert.ok(!fixes.includes('reduce-dom'));
 });
 
+test('lcp-lazy-loaded maps to preload-lcp-image and merges with the preload audit', () => {
+  const lazyOnly = extractFindings({
+    audits: {
+      'lcp-lazy-loaded': {
+        score: 0,
+        title: 'Largest Contentful Paint image was lazily loaded',
+        metricSavings: { LCP: 400 },
+        details: { type: 'table', items: [{ node: { selector: 'img.hero', snippet: '<img loading="lazy">' } }] },
+      },
+    },
+  } as unknown as LhrLike);
+  assert.equal(lazyOnly.length, 1);
+  assert.equal(lazyOnly[0].fix, 'preload-lcp-image');
+  assert.equal(lazyOnly[0].auditId, 'lcp-lazy-loaded');
+  assert.equal(lazyOnly[0].savingsMs, 400);
+
+  const merged = extractFindings({
+    audits: {
+      'lcp-lazy-loaded': {
+        score: 0,
+        title: 'Largest Contentful Paint image was lazily loaded',
+        metricSavings: { LCP: 400 },
+        details: { type: 'table', items: [{ node: { selector: 'img.hero' } }] },
+      },
+      'prioritize-lcp-image': {
+        score: 0,
+        title: 'Preload Largest Contentful Paint image',
+        details: { type: 'opportunity', overallSavingsMs: 900, items: [{ url: 'http://x/img/hero.png', wastedMs: 900 }] },
+      },
+    },
+  } as unknown as LhrLike);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].fix, 'preload-lcp-image');
+  assert.equal(merged[0].auditId, 'prioritize-lcp-image');
+  assert.equal(merged[0].savingsMs, 900);
+});
+
 test('findings that share a fix are merged into one', () => {
   const found = extractFindings(lhr).filter((f) => f.fix === 'optimize-images');
   assert.equal(found.length, 1);
