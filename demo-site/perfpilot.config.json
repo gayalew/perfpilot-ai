@@ -1,0 +1,9 @@
+{
+  "installCommand": "",
+  "buildCommand": "",
+  "startCommand": "node server.mjs",
+  "port": 4200,
+  "paths": ["/"],
+  "publicDir": "public",
+  "serverFile": "server.mjs"
+}

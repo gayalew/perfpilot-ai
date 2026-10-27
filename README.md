@@ -23,3 +23,21 @@ How a change is judged: runs are interleaved, compared per metric with a one-sid
 and must also exceed a minimum effect size and the baseline's run-to-run noise.
 
 Never commit `.env`. See `.env.example`.
+
+## Optimize
+
+```
+npx tsx --env-file=.env worker/src/cli.ts optimize demo-site --runs 4 --final-runs 5
+npx tsx --env-file=.env worker/src/cli.ts optimize demo-site --runs 4 --final-runs 5 --no-ai
+```
+
+`optimize <repoPath>` copies the site into `runs/<id>/work`, tries one planned fix at a time on a local branch, and keeps the change only when every gate passes:
+
+1. **build** — `buildCommand` exits 0, or there is nothing to build.
+2. **smoke** — each configured path and its same-origin assets respond, and the page does not add console errors.
+3. **visual** — screenshots at 390×844 and 1350×940 stay within a small pixel difference.
+4. **performance** — interleaved Lighthouse runs (`--runs`, default 4) must come back `improved`. An unchanged result is not enough.
+
+A passing fix is committed in the sandbox copy. A failing fix is reset. Nothing is merged or pushed. `--no-ai` skips model edits (`needs AI`) and still applies the deterministic fixes. The run writes `ledger.json`, `events.jsonl`, and `summary.md`. Exit code is 0 when the run finishes, including when some fixes were reverted.
+
+A repo can supply `perfpilot.config.json` (`startCommand`, `port`, `paths`, `publicDir`, `serverFile`, and optional install/build commands).

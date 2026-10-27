@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { compareMeasurements, formatComparison } from './compare.js';
 import { extractFindings, FIX_CATALOG } from './diagnose.js';
@@ -7,6 +8,7 @@ import { planFixes } from './gemini.js';
 import { PROFILES, runLighthouseOnce, type ProfileName } from './lighthouse-runner.js';
 import { aggregate, measureInterleaved, measureUrl, type Measurement } from './measure.js';
 import { METRICS, formatMetric } from './metrics.js';
+import { formatTable, optimize } from './optimize.js';
 
 const HELP = `PerfPilot worker
 
@@ -15,6 +17,7 @@ Usage:
   perfpilot-worker ab <baselineUrl> <candidateUrl> [--runs 5] [--profile mobile] [--out result.json]
   perfpilot-worker compare <baseline.json> <candidate.json> [--out result.json]
   perfpilot-worker diagnose <url> [--profile mobile] [--no-ai] [--out diagnosis.json]
+  perfpilot-worker optimize <repoPath> [--runs 4] [--final-runs 5] [--max-steps 12] [--no-ai] [--out-dir runs]
 
 Profiles: ${Object.keys(PROFILES).join(', ')}
 Set PERFPILOT_CHROME to use a specific Chrome/Chromium binary.
@@ -23,7 +26,10 @@ Set PERFPILOT_CHROME to use a specific Chrome/Chromium binary.
 const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
-    runs: { type: 'string', default: '5' },
+    runs: { type: 'string' },
+    'final-runs': { type: 'string' },
+    'max-steps': { type: 'string' },
+    'out-dir': { type: 'string' },
     profile: { type: 'string', default: 'mobile' },
     out: { type: 'string' },
     json: { type: 'boolean', default: false },
@@ -38,10 +44,14 @@ function parseProfile(): ProfileName {
   return p as ProfileName;
 }
 
-function parseRuns(): number {
-  const n = Number(flags.runs);
-  if (!Number.isInteger(n) || n < 3 || n > 25) throw new Error('--runs must be a whole number from 3 to 25');
+function parseBounded(raw: string | undefined, fallback: number, min: number, max: number, name: string): number {
+  const n = Number(raw ?? fallback);
+  if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${name} must be a whole number from ${min} to ${max}`);
   return n;
+}
+
+function parseRuns(fallback: number): number {
+  return parseBounded(flags.runs, fallback, 3, 25, '--runs');
 }
 
 const progress = (message: string) => process.stderr.write(`  ${message}\n`);
@@ -69,7 +79,7 @@ async function main(): Promise<void> {
 
   if (command === 'measure') {
     if (!args[0]) throw new Error('measure needs a URL');
-    const m = await measureUrl({ url: args[0], runs: parseRuns(), profile: parseProfile(), onProgress: progress });
+    const m = await measureUrl({ url: args[0], runs: parseRuns(5), profile: parseProfile(), onProgress: progress });
     if (flags.out) await writeFile(flags.out, JSON.stringify(m, null, 2));
     if (flags.json) console.log(JSON.stringify(m, null, 2));
     else printMeasurement(m);
@@ -78,7 +88,7 @@ async function main(): Promise<void> {
 
   if (command === 'ab') {
     if (!args[0] || !args[1]) throw new Error('ab needs a baseline URL and a candidate URL');
-    const [a, b] = await measureInterleaved(args[0], args[1], { runs: parseRuns(), profile: parseProfile(), onProgress: progress });
+    const [a, b] = await measureInterleaved(args[0], args[1], { runs: parseRuns(5), profile: parseProfile(), onProgress: progress });
     const result = compareMeasurements(a, b);
     if (flags.out) await writeFile(flags.out, JSON.stringify({ baseline: a, candidate: b, comparison: result }, null, 2));
     console.log(flags.json ? JSON.stringify(result, null, 2) : formatComparison(result));
@@ -119,6 +129,34 @@ async function main(): Promise<void> {
         if (label) console.log(`   - ${label}`);
       }
     }
+    return;
+  }
+
+  if (command === 'optimize') {
+    if (!args[0]) throw new Error('optimize needs a repo path');
+    const runs = parseRuns(4);
+    const finalRuns = parseBounded(flags['final-runs'], 5, 3, 25, '--final-runs');
+    const maxSteps = parseBounded(flags['max-steps'], 12, 1, 50, '--max-steps');
+    const outDir = flags['out-dir'] ?? 'runs';
+    const runId = new Date().toISOString().replace(/[:.]/g, '-');
+    const runDir = path.resolve(outDir, runId);
+    const started = Date.now();
+    const result = await optimize({
+      repoPath: args[0],
+      runs,
+      finalRuns,
+      maxSteps,
+      useAi: !flags['no-ai'],
+      runDir,
+      onEvent: (event) => {
+        if (event.type === 'step-start') progress(`step ${event.order} ${event.fix}`);
+        else if (event.type === 'gate-end') progress(`  ${event.gate} ${event.passed ? 'pass' : 'fail'} (${event.ms} ms) ${event.details}`);
+        else if (event.type === 'step-end') progress(`${event.status}: ${event.reason}`);
+      },
+    });
+    console.log(formatTable(result.ledger));
+    console.log(`\nWrote ${result.runDir}`);
+    console.log(`Wall clock: ${((Date.now() - started) / 1000).toFixed(1)} s`);
     return;
   }
 

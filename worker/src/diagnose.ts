@@ -238,7 +238,7 @@ export interface PlanStep {
   order: number;
 }
 
-export function heuristicPlan(findings: Finding[], limit = 8, note?: string): Plan {
+export function heuristicPlan(findings: Finding[], limit = 12, note?: string): Plan {
   const steps = findings.slice(0, limit).map((f, i) => ({
     fix: f.fix,
     auditId: f.auditId,

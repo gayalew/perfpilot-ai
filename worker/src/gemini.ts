@@ -79,17 +79,14 @@ export function validatePlan(raw: unknown, findings: Finding[], maxSteps = 8): P
 }
 
 /**
- * Asks Gemini to order the fixes. Never throws: when the key is missing, the free quota is
- * used up, or the reply is malformed, it falls back to the deterministic plan and says why.
+ * One Gemini generateContent call. The API key is sent as a header, never in the URL or body.
+ * Throws a short error that does not include the key. Callers decide how to recover.
  */
-export async function planFixes(findings: Finding[], options: GeminiOptions = {}): Promise<Plan> {
-  const maxSteps = options.maxSteps ?? 8;
-  if (findings.length === 0) return { source: 'heuristic', steps: [], note: 'No fixable findings.' };
-
-  const apiKey = options.apiKey ?? process.env.GEMINI_API_KEY;
+export async function geminiGenerate(system: string, user: string, options: GeminiOptions = {}): Promise<string> {
+  const apiKey = options.apiKey ?? process.env.GEMINI_API_KEY ?? '';
   const model = (options.model ?? process.env.GEMINI_MODEL ?? '').replace(/^models\//, '');
-  if (!apiKey) return heuristicPlan(findings, maxSteps, 'GEMINI_API_KEY is not set; used the built-in ranking.');
-  if (!model) return heuristicPlan(findings, maxSteps, 'GEMINI_MODEL is not set; used the built-in ranking.');
+  if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
+  if (!model) throw new Error('GEMINI_MODEL is not set');
 
   const doFetch = options.fetchImpl ?? fetch;
   const controller = new AbortController();
@@ -99,24 +96,45 @@ export async function planFixes(findings: Finding[], options: GeminiOptions = {}
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: [{ role: 'user', parts: [{ text: buildPrompt(findings) }] }],
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{ text: user }] }],
         generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
       }),
       signal: controller.signal,
     });
     if (!res.ok) {
-      const hint = res.status === 429 ? 'free quota reached' : `HTTP ${res.status}`;
-      return heuristicPlan(findings, maxSteps, `Gemini unavailable (${hint}); used the built-in ranking.`);
+      throw new Error(res.status === 429 ? 'free quota reached' : `HTTP ${res.status}`);
     }
     const body = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-    const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+    return body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Asks Gemini to order the fixes. Never throws: when the key is missing, the free quota is
+ * used up, or the reply is malformed, it falls back to the deterministic plan and says why.
+ */
+export async function planFixes(findings: Finding[], options: GeminiOptions = {}): Promise<Plan> {
+  const maxSteps = options.maxSteps ?? 12;
+  if (findings.length === 0) return { source: 'heuristic', steps: [], note: 'No fixable findings.' };
+
+  const apiKey = options.apiKey ?? process.env.GEMINI_API_KEY;
+  const model = (options.model ?? process.env.GEMINI_MODEL ?? '').replace(/^models\//, '');
+  if (!apiKey) return heuristicPlan(findings, maxSteps, 'GEMINI_API_KEY is not set; used the built-in ranking.');
+  if (!model) return heuristicPlan(findings, maxSteps, 'GEMINI_MODEL is not set; used the built-in ranking.');
+
+  try {
+    const text = await geminiGenerate(SYSTEM_PROMPT, buildPrompt(findings), options);
     const steps = validatePlan(parseJson(text), findings, maxSteps);
     return { source: 'gemini', steps };
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
-    return heuristicPlan(findings, maxSteps, `Gemini reply could not be used (${why}); used the built-in ranking.`);
-  } finally {
-    clearTimeout(timer);
+    const unavailable = why === 'free quota reached' || /^HTTP \d+$/.test(why);
+    const note = unavailable
+      ? `Gemini unavailable (${why}); used the built-in ranking.`
+      : `Gemini reply could not be used (${why}); used the built-in ranking.`;
+    return heuristicPlan(findings, maxSteps, note);
   }
 }
