@@ -10,6 +10,7 @@ export interface Config {
   geminiModel: string;
   port: number;
   nodeEnv: string;
+  cookieSameSite: 'lax' | 'none';
 }
 
 const REQUIRED = [
@@ -47,6 +48,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (missing.length) throw new Error(`Missing environment variables: ${missing.join(', ')}`);
   const port = present(env, 'PORT') ? Number(present(env, 'PORT')) : 8080;
   if (!Number.isInteger(port) || port <= 0) throw new Error('PORT must be a positive integer');
+  const cookieSameSite = (present(env, 'COOKIE_SAMESITE') || 'lax').toLowerCase();
+  if (cookieSameSite !== 'lax' && cookieSameSite !== 'none') throw new Error('COOKIE_SAMESITE must be lax or none');
   return {
     databaseUrl: values.DATABASE_URL,
     sessionSecret: values.SESSION_SECRET,
@@ -59,5 +62,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     geminiModel: values.GEMINI_MODEL,
     port,
     nodeEnv: present(env, 'NODE_ENV') || 'development',
+    cookieSameSite: cookieSameSite as 'lax' | 'none',
   };
 }

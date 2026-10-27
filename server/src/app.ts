@@ -70,10 +70,15 @@ const jobSchema = z.object({
 });
 
 export interface AppDeps {
-  config: Pick<Config, 'sessionSecret' | 'adminPassword' | 'clientOrigin' | 'nodeEnv'>;
+  config: Pick<Config, 'sessionSecret' | 'adminPassword' | 'clientOrigin' | 'nodeEnv'> & { cookieSameSite?: 'lax' | 'none' };
   stores: Stores;
   bus: EventBus;
   executor: Executor;
+}
+
+function cookieFlags(config: AppDeps['config']): { sameSite: 'lax' | 'none'; secure: boolean } {
+  const sameSite = config.cookieSameSite === 'none' ? 'none' : 'lax';
+  return { sameSite, secure: config.nodeEnv === 'production' || sameSite === 'none' };
 }
 
 function asyncRoute(fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>) {
@@ -122,10 +127,11 @@ export function createApp(deps: AppDeps): express.Express {
       res.status(401).json({ error: 'invalid password' });
       return;
     }
+    const cookie = cookieFlags(config);
     res.cookie(SESSION_COOKIE, signSession(config.sessionSecret), {
       httpOnly: true,
-      sameSite: 'lax',
-      secure: config.nodeEnv === 'production',
+      sameSite: cookie.sameSite,
+      secure: cookie.secure,
       maxAge: 12 * 60 * 60 * 1000,
       path: '/',
     });
@@ -143,7 +149,8 @@ export function createApp(deps: AppDeps): express.Express {
   });
 
   app.post('/api/logout', (_req, res) => {
-    res.clearCookie(SESSION_COOKIE, { path: '/' });
+    const cookie = cookieFlags(config);
+    res.clearCookie(SESSION_COOKIE, { path: '/', sameSite: cookie.sameSite, secure: cookie.secure });
     res.json({ ok: true });
   });
 
@@ -212,6 +219,28 @@ export function createApp(deps: AppDeps): express.Express {
 
   app.get('/api/projects/:id/jobs', asyncRoute(async (req, res) => {
     res.json(await stores.jobs.listByProject(String(req.params.id)));
+  }));
+
+  app.get('/api/projects/:id/summary', asyncRoute(async (req, res) => {
+    const project = await stores.projects.get(String(req.params.id));
+    if (!project) {
+      res.status(404).json({ error: 'project not found' });
+      return;
+    }
+    const jobs = (await stores.jobs.listByProject(project.id)).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const lastJob = jobs.at(-1) ?? null;
+    const lastSucceededOptimize = [...jobs].reverse().find((job) => job.type === 'optimize' && job.status === 'succeeded') ?? null;
+    const lastPrUrl = [...jobs].reverse().find((job) => job.prUrl)?.prUrl ?? null;
+    res.json({ lastJob, lastSucceededOptimize, lastPrUrl, jobCount: jobs.length });
+  }));
+
+  app.get('/api/jobs', asyncRoute(async (req, res) => {
+    const parsed = z.coerce.number().int().min(1).max(100).default(20).safeParse(req.query.limit ?? 20);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'limit must be between 1 and 100' });
+      return;
+    }
+    res.json(await stores.jobs.listRecent(parsed.data));
   }));
 
   app.get('/api/jobs/:id', asyncRoute(async (req, res) => {

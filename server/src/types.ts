@@ -44,6 +44,10 @@ export interface Job {
   finishedAt: string | null;
 }
 
+export interface JobWithProject extends Job {
+  projectName: string;
+}
+
 export interface JobPatch {
   status?: JobStatus;
   result?: unknown;

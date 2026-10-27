@@ -1,5 +1,5 @@
 import pg from 'pg';
-import type { Job, JobEvent, JobPatch, JobStatus, JobType, Measurement, Project, ProjectInput, ProjectMode } from '../types.js';
+import type { Job, JobEvent, JobPatch, JobStatus, JobType, JobWithProject, Measurement, Project, ProjectInput, ProjectMode } from '../types.js';
 import type { Stores } from './types.js';
 
 const { Pool } = pg;
@@ -132,6 +132,13 @@ export function createPgStores(pool: pg.Pool): Stores {
       async listByStatus(status) {
         const result = await pool.query('SELECT * FROM jobs WHERE status = $1 ORDER BY created_at', [status]);
         return result.rows.map((row) => jobRow(row));
+      },
+      async listRecent(limit: number): Promise<JobWithProject[]> {
+        const result = await pool.query(
+          `SELECT j.*, p.name AS project_name FROM jobs j JOIN projects p ON p.id = j.project_id ORDER BY j.created_at DESC LIMIT $1`,
+          [limit],
+        );
+        return result.rows.map((row) => ({ ...jobRow(row), projectName: String(row.project_name ?? '') }));
       },
       async update(id, patch: JobPatch) {
         const current = await pool.query('SELECT * FROM jobs WHERE id = $1', [id]);

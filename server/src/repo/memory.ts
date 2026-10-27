@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Job, JobEvent, JobPatch, JobStatus, Measurement, Project, ProjectInput } from '../types.js';
+import type { Job, JobEvent, JobPatch, JobStatus, JobWithProject, Measurement, Project, ProjectInput } from '../types.js';
 import type { EventStore, JobStore, MeasurementStore, ProjectStore, Stores } from './types.js';
 
 function now(): string {
@@ -98,6 +98,12 @@ export function createMemoryStores(): Stores {
     },
     async listByStatus(status: JobStatus) {
       return jobs.filter((job) => job.status === status).map((job) => ({ ...job }));
+    },
+    async listRecent(limit: number): Promise<JobWithProject[]> {
+      return [...jobs]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, limit)
+        .map((job) => ({ ...job, projectName: projects.find((project) => project.id === job.projectId)?.name ?? '' }));
     },
     async update(id, patch: JobPatch) {
       const job = jobs.find((item) => item.id === id);

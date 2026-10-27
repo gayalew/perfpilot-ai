@@ -1,39 +1,67 @@
-import { useState } from "react";
-import heroImg from "./assets/hero.png";
-import reactLogo from "./assets/react.svg";
-import viteLogo from "./assets/vite.svg";
-import "./App.css";
-import SlowApp from "./SlowApp";
+import { useEffect, useState } from 'react';
+import { Route, Routes, useLocation } from 'react-router-dom';
+import { ApiError, me } from './api.ts';
+import { Shell } from './components/Shell.tsx';
+import { ToastProvider } from './components/Toast.tsx';
+import { DashboardPage } from './pages/DashboardPage.tsx';
+import { JobPage } from './pages/JobPage.tsx';
+import { LoginPage } from './pages/LoginPage.tsx';
+import { NotFoundPage } from './pages/NotFoundPage.tsx';
+import { ProjectFormPage } from './pages/ProjectFormPage.tsx';
+import { ProjectPage } from './pages/ProjectPage.tsx';
 
-function App() {
-  const [count, setCount] = useState(0);
+function RequireAuth() {
+  const location = useLocation();
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [message, setMessage] = useState('');
 
+  useEffect(() => {
+    let gone = false;
+    me()
+      .then(() => {
+        if (!gone) setState('ready');
+      })
+      .catch((error: unknown) => {
+        if (gone) return;
+        if (error instanceof ApiError && error.status === 401) return;
+        setMessage(error instanceof Error ? error.message : 'Could not reach PerfPilot');
+        setState('error');
+      });
+    return () => {
+      gone = true;
+    };
+  }, [location.pathname]);
+
+  if (state === 'loading') return <div className="min-h-screen bg-zinc-100 dark:bg-zinc-950" />;
+  if (state === 'error') {
+    return (
+      <div className="mx-auto max-w-lg px-4 py-16">
+        <p role="alert" className="text-sm text-red-700">{message}</p>
+        <button type="button" className="mt-3 text-sm text-indigo-700 underline" onClick={() => window.location.reload()}>Retry</button>
+      </div>
+    );
+  }
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <SlowApp />
-    </>
+    <Shell>
+      <Routes>
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/projects/new" element={<ProjectFormPage />} />
+        <Route path="/projects/:id/edit" element={<ProjectFormPage />} />
+        <Route path="/projects/:id" element={<ProjectPage />} />
+        <Route path="/jobs/:id" element={<JobPage />} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </Shell>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <ToastProvider>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="*" element={<RequireAuth />} />
+      </Routes>
+    </ToastProvider>
+  );
+}

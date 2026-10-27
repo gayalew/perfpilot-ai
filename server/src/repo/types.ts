@@ -1,4 +1,4 @@
-import type { Job, JobEvent, JobPatch, JobStatus, JobType, Measurement, Project, ProjectInput } from '../types.js';
+import type { Job, JobEvent, JobPatch, JobStatus, JobType, JobWithProject, Measurement, Project, ProjectInput } from '../types.js';
 
 export interface ProjectStore {
   list(): Promise<Project[]>;
@@ -14,6 +14,7 @@ export interface JobStore {
   get(id: string): Promise<Job | null>;
   listByProject(projectId: string): Promise<Job[]>;
   listByStatus(status: JobStatus): Promise<Job[]>;
+  listRecent(limit: number): Promise<JobWithProject[]>;
   update(id: string, patch: JobPatch): Promise<Job | null>;
 }
 

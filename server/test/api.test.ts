@@ -245,3 +245,66 @@ test('SSE replays events after Last-Event-ID and then closes on job-end', async 
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('recent jobs and project summary', async () => {
+  const { server, base } = await boot();
+  try {
+    const login = await fetch(`${base}/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'correct-password' }),
+    });
+    const cookie = cookieFrom(login);
+    const headers = { cookie, 'content-type': 'application/json' };
+    const created = await fetch(`${base}/api/projects`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Repo', mode: 'repo', repoOwner: 'acme', repoName: 'demo' }),
+    });
+    const project = (await created.json()) as { id: string };
+    const job = await fetch(`${base}/api/projects/${project.id}/jobs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'audit' }),
+    });
+    assert.equal(job.status, 202);
+    const recent = (await (await fetch(`${base}/api/jobs?limit=20`, { headers: { cookie } })).json()) as Array<{ projectName: string; type: string }>;
+    assert.equal(recent[0]?.projectName, 'Repo');
+    assert.equal(recent[0]?.type, 'audit');
+    const summary = (await (await fetch(`${base}/api/projects/${project.id}/summary`, { headers: { cookie } })).json()) as {
+      jobCount: number;
+      lastJob: { type: string } | null;
+      lastPrUrl: string | null;
+    };
+    assert.equal(summary.jobCount, 1);
+    assert.equal(summary.lastJob?.type, 'audit');
+    assert.equal(summary.lastPrUrl, null);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('SameSite=None forces a Secure cookie', async () => {
+  const stores = createMemoryStores();
+  const app = createApp({
+    config: { ...config, cookieSameSite: 'none' },
+    stores,
+    bus: new EventBus(),
+    executor: fakeExecutor(),
+  });
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once('listening', resolve));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'correct-password' }),
+    });
+    const header = (typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [res.headers.get('set-cookie') ?? '']).join(';');
+    assert.match(header, /SameSite=None/i);
+    assert.match(header, /Secure/i);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
