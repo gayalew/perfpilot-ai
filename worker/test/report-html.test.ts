@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { escapeHtml, renderReportHtml } from '../src/report/html.js';
-import type { Ledger } from '../src/optimize.js';
+import { formatSummary, type Ledger } from '../src/optimize.js';
 import type { MetricKey } from '../src/metrics.js';
 
 function summary(value: number) {
@@ -94,10 +94,16 @@ test('report html escapes ledger text and renders every section', () => {
   assert.match(html, /simulated slow 4G/);
   assert.match(html, /Mann-Whitney U/);
   assert.match(html, /never merges/);
+  assert.match(html, /1 proven performance improvement/);
+  assert.doesNotMatch(html, /1 proven performance improvements/);
+  assert.match(formatSummary(ledger), /1 proven performance improvement/);
   assert.match(html, /Score 38 to 65/);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;\.js/);
   assert.match(html, /&lt;b&gt;bad&lt;\/b&gt;/);
   assert.match(html, /Counted as harm: tbt/);
   assert.doesNotMatch(html, /<script>alert/);
   assert.doesNotMatch(html, /<b>bad<\/b>/);
+  const runtime = renderReportHtml({ ...ledger, aiSource: 'runtime' }, { projectName: 'Demo <site>', target: 'acme/demo', version: '0.1.0' });
+  assert.match(runtime, /1 proven runtime improvement/);
+  assert.doesNotMatch(runtime, /1 proven runtime improvements/);
 });

@@ -58,6 +58,19 @@ test('measurePair compares an interleaved raw URL against the proxy URL', async 
   assert.equal(report.steps[0]?.status, 'kept');
 });
 
+test('a blocked redirect note is kept on the experiment step', async () => {
+  const plan = heuristicPlan([findings[0]!]);
+  const report = await runRuntimeExperiments({
+    url: 'http://example.test/',
+    findings: [findings[0]!],
+    plan,
+    measure: async (url) => measurement(url, url.includes('candidate') ? 80 : 40, 3000),
+    openProxy: async () => ({ url: 'http://example.test/candidate', notes: ['blocked redirect'], close: async () => undefined }),
+  });
+  assert.match(report.steps[0]?.reason ?? '', /blocked redirect/);
+  assert.deepEqual(report.steps[0]?.notes, ['blocked redirect']);
+});
+
 test('a candidate that does not improve is reverted', async () => {
   const plan = heuristicPlan([findings[0]!]);
   const report = await runRuntimeExperiments({

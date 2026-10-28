@@ -129,6 +129,11 @@ export function isQuietChange(before: number | null, after: number | null, verdi
   return Math.abs((after - before) / Math.abs(before)) * 100 < 0.5;
 }
 
+/** "1 proven runtime improvement", "2 proven runtime improvements". */
+export function provenCount(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? '' : 's'}`;
+}
+
 /** None selected means the plan, capped by max steps. A selection uses that count, still capped by max steps. */
 export function estimateMinutes(type: 'audit' | 'optimize' | 'monitor' | 'experiment' | 'field', runs: number, maxSteps: number, onlyFixes: readonly string[] = []): number {
   const steps = onlyFixes.length > 0 ? Math.min(onlyFixes.length, maxSteps) : maxSteps;

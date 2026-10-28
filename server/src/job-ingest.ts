@@ -6,7 +6,7 @@ export interface IngestDeps {
   stores: Stores;
   bus: EventBus;
   redact?: (text: string) => string;
-  runs?: { set(jobId: string, runId: number): void };
+  runs?: { get(jobId: string): number | undefined; set(jobId: string, runId: number): void };
   onSettled?: (info: { job: Job; project: Project; status: JobStatus; payload: unknown }) => Promise<void>;
 }
 
@@ -20,12 +20,17 @@ function psiMetrics(field: unknown): Record<string, number | null> {
 }
 
 /** Records one worker event from a GitHub Actions callback. A finished job ignores later events. */
-export async function ingestWorkerEvent(deps: IngestDeps, jobId: string, type: string, payload: unknown): Promise<'ok' | 'missing' | 'closed'> {
+export async function ingestWorkerEvent(deps: IngestDeps, jobId: string, type: string, payload: unknown): Promise<'ok' | 'missing' | 'closed' | 'duplicate'> {
   const job = await deps.stores.jobs.get(jobId);
   if (!job) return 'missing';
+  const body = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  if (type === 'actions-run') {
+    const runId = Number(body.runId);
+    const current = deps.runs?.get(jobId);
+    if (Number.isInteger(runId) && runId > 0 && current && current !== runId) return 'duplicate';
+  }
   if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled') return 'closed';
   const redact = deps.redact ?? ((text: string) => text);
-  const body = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   if (job.status === 'queued') {
     await deps.stores.jobs.update(job.id, { status: 'running', startedAt: new Date().toISOString(), error: null });
   }

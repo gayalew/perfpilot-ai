@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { estimateMinutes, formatBytes, formatDuration, formatMs, formatPercentChange, formatRelativeTime, formatRunTitle, isQuietChange, resultHeadline, safeGithubUrl } from './format.ts';
+import { estimateMinutes, formatBytes, formatDuration, formatMs, formatPercentChange, formatRelativeTime, formatRunTitle, isQuietChange, provenCount, resultHeadline, safeGithubUrl } from './format.ts';
 
 describe('format helpers', () => {
   test('formats milliseconds and seconds', () => {
@@ -40,6 +40,12 @@ describe('format helpers', () => {
     expect(formatRunTitle('optimize', started)).toBe('Optimize run, Oct 27, 10:14');
     expect(formatRunTitle('audit', null)).toBe('Audit run');
     expect(formatRunTitle('optimize', 'not-a-date')).toBe('Optimize run');
+  });
+
+  test('pluralizes a proven count', () => {
+    expect(provenCount(1, 'proven runtime improvement')).toBe('1 proven runtime improvement');
+    expect(provenCount(0, 'proven runtime improvement')).toBe('0 proven runtime improvements');
+    expect(provenCount(2, 'proven runtime improvement')).toBe('2 proven runtime improvements');
   });
 
   test('builds a headline from the three largest proven improvements', () => {

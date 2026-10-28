@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ApiError, cancelJob, getJob, getLedger, getProject, listNotifications, reportPdfUrl, summaryMarkdownUrl, type FieldReport, type Job, type NotificationRow } from '../api.ts';
 import { watchJob } from '../events.ts';
-import { formatDuration, formatMetric, formatPercentChange, formatRelativeTime, formatRunTitle, isQuietChange, resultHeadline, safeGithubUrl } from '../format.ts';
+import { formatDuration, formatMetric, formatPercentChange, formatRelativeTime, formatRunTitle, isQuietChange, provenCount, resultHeadline, safeGithubUrl } from '../format.ts';
 import type { MonitorStatus } from '../api.ts';
 import { applyLedger, emptyJobState, reduceJob, type Experiment, type GateName, type JobView, type MetricChange, type MetricSnapshot } from '../jobState.ts';
 import { Badge } from '../components/Badge.tsx';
@@ -396,7 +396,7 @@ export function JobPage() {
                 </div>
               )}
               {job.type === 'experiment' && view.ok !== false && (
-                <p className="mt-3 text-sm font-medium">{view.counts?.kept ?? 0} proven runtime improvements</p>
+                <p className="mt-3 text-sm font-medium">{provenCount(view.counts?.kept ?? 0, 'proven runtime improvement')}</p>
               )}
               {view.counts && (
                 <p className="mt-3 text-sm">

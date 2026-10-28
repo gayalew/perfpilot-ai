@@ -12,6 +12,7 @@ import type { Executor } from './executor.js';
 import type { Stores } from './repo/types.js';
 import type { Project, ProjectInput } from './types.js';
 import { cronValid } from './monitor/due.js';
+import { targetUrlError } from '../../shared/target-url.js';
 import type { ChannelResult } from './notify/dispatch.js';
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
@@ -53,8 +54,12 @@ const projectObject = z.object({
   scheduleCron: z.string().nullable().optional(),
 });
 
-function refineProject(value: z.infer<typeof projectObject>, ctx: z.RefinementCtx, partial: boolean): void {
+async function refineProject(value: z.infer<typeof projectObject>, ctx: z.RefinementCtx, partial: boolean): Promise<void> {
   if (!partial && value.mode === 'url' && !value.url) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['url'], message: 'url is required' });
+  if (value.url) {
+    const problem = await targetUrlError(value.url);
+    if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['url'], message: problem });
+  }
   if (!partial && value.mode === 'repo') {
     if (!value.repoOwner || !NAME.test(value.repoOwner)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['repoOwner'], message: 'repo_owner is invalid' });
     if (!value.repoName || !NAME.test(value.repoName)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['repoName'], message: 'repo_name is invalid' });
@@ -211,6 +216,10 @@ export function createApp(deps: AppDeps): express.Express {
       res.status(404).json({ error: 'job not found' });
       return;
     }
+    if (result === 'duplicate') {
+      res.status(409).json({ error: 'run already registered' });
+      return;
+    }
     res.json({ ok: true, result });
   }));
 
@@ -239,7 +248,7 @@ export function createApp(deps: AppDeps): express.Express {
   }));
 
   app.post('/api/projects', asyncRoute(async (req, res) => {
-    const parsed = projectSchema.parse(normalizeProject(req.body));
+    const parsed = await projectSchema.parseAsync(normalizeProject(req.body));
     const project = await stores.projects.create(toInput(parsed));
     deps.scheduler?.sync(project);
     res.status(201).json(project);
@@ -260,7 +269,7 @@ export function createApp(deps: AppDeps): express.Express {
       res.status(404).json({ error: 'project not found' });
       return;
     }
-    const parsed = patchSchema.parse(normalizeProject({ ...existing, ...((req.body ?? {}) as object) }));
+    const parsed = await patchSchema.parseAsync(normalizeProject({ ...existing, ...((req.body ?? {}) as object) }));
     const project = await stores.projects.update(existing.id, toInput({ ...existing, ...parsed, name: parsed.name ?? existing.name, mode: parsed.mode ?? existing.mode }));
     if (project) deps.scheduler?.sync(project);
     res.json(project);

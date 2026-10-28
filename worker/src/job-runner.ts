@@ -13,6 +13,7 @@ import { renderReportHtml } from './report/html.js';
 import { renderReportPdf } from './report/pdf.js';
 import { git } from './repo.js';
 import { fetchField } from './field.js';
+import { targetUrlError } from '../../shared/target-url.js';
 import { runRuntimeExperiments } from './runtime/experiment.js';
 
 export interface JobSpec {
@@ -168,7 +169,7 @@ async function runOptimize(spec: JobSpec): Promise<void> {
   }
   const body = buildPrBody(result.ledger);
   await runGit(site, ['-c', headerArg(token), 'push', 'origin', `HEAD:refs/heads/${result.branch}`], token);
-  const pr = await openPullRequest(spec, result.branch, `PerfPilot: ${kept.length} proven performance improvements`, body, token);
+  const pr = await openPullRequest(spec, result.branch, `PerfPilot: ${provenLine(kept.length, 'proven performance improvement')}`, body, token);
   emit('pr-created', { url: pr.url, number: pr.number });
   await writeReport(spec, result.ledger, pr.url);
   emit('job-end', { ok: true, prUrl: pr.url, summary: result.summary, ledger: result.ledger, branch: result.branch });
@@ -195,17 +196,26 @@ async function main(): Promise<void> {
   else await runOptimize(spec);
 }
 
+async function requireUrl(url: string | null | undefined, missing: string): Promise<string> {
+  if (!url) throw new Error(missing);
+  const problem = await targetUrlError(url);
+  if (problem) throw new Error(problem);
+  return url;
+}
+
+function provenLine(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? '' : 's'}`;
+}
+
 async function runField(spec: JobSpec): Promise<void> {
-  const url = spec.project.url;
-  if (!url) throw new Error('field data requires a project URL');
+  const url = await requireUrl(spec.project.url, 'field data requires a project URL');
   emit('job-start', { jobId: spec.jobId, type: 'field' });
   const field = await fetchField(url);
   emit('job-end', { ok: true, field });
 }
 
 async function runExperiment(spec: JobSpec): Promise<void> {
-  const url = spec.project.url;
-  if (!url) throw new Error('experiment requires a project URL');
+  const url = await requireUrl(spec.project.url, 'experiment requires a project URL');
   if (spec.project.mode !== 'url') throw new Error('experiment requires a URL project');
   const lhr = await runLighthouseOnce({ url, profile: 'mobile' });
   const findings = extractFindings(lhr);
@@ -250,6 +260,13 @@ async function runExperiment(spec: JobSpec): Promise<void> {
     runs: spec.runs,
   };
   await writeReport(spec, ledger, null);
+  const kept = report.steps.filter((step) => step.status === 'kept').length;
+  const summary = [
+    `# ${provenLine(kept, 'proven runtime improvement')}`,
+    '',
+    ...report.steps.map((step) => `- ${step.fix}: ${step.status}. ${step.reason}`),
+    '',
+  ].join('\n');
   emit('job-end', {
     ok: true,
     baseline: report.baseline,
@@ -257,12 +274,12 @@ async function runExperiment(spec: JobSpec): Promise<void> {
     plan,
     ledger,
     experiments: report.steps,
+    summary,
   });
 }
 
 async function runMonitor(spec: JobSpec): Promise<void> {
-  const url = spec.project.url;
-  if (!url) throw new Error('monitor requires a project URL. Set the URL field for this project.');
+  const url = await requireUrl(spec.project.url, 'monitor requires a project URL. Set the URL field for this project.');
   const runs = Math.min(10, Math.max(3, spec.runs || 5));
   emit('job-start', { jobId: spec.jobId, type: 'monitor' });
   const measured = await measureUrl({ url, runs, profile: 'mobile', onProgress: () => undefined });

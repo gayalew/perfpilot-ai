@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { actionsRunDir } from './actions.js';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { EventBus } from './events.js';
@@ -100,7 +101,7 @@ const actions = new GithubActionsExecutor({
     maxSteps: job.params.maxSteps ?? 12,
     useAi: job.params.useAi ?? true,
     onlyFixes: Array.isArray(job.params.onlyFixes) ? job.params.onlyFixes : undefined,
-    runDir: path.join(root, 'runs', job.id),
+    runDir: actionsRunDir(job.id),
     project: {
       mode: project.mode,
       url: project.url,

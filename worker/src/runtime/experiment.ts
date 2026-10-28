@@ -11,6 +11,7 @@ export interface RuntimeStep {
   title: string;
   status: 'kept' | 'reverted' | 'skipped';
   reason: string;
+  notes: string[];
   gates: Array<{ name: string; passed: boolean; details: string; comparison?: unknown }>;
 }
 
@@ -91,7 +92,7 @@ async function runStep(
   if (!isRuntimeFix(step.fix)) {
     const reason = 'needs a repository';
     emit({ type: 'step-end', order: step.order, fix: step.fix, status: 'skipped', reason });
-    return { order: step.order, fix: step.fix, title: title(step.fix), status: 'skipped', reason, gates: [] };
+    return { order: step.order, fix: step.fix, title: title(step.fix), status: 'skipped', reason, notes: [], gates: [] };
   }
   const items = itemsFor(options.findings, step.fix);
   let proxy: RuntimeProxy | null = null;
@@ -128,14 +129,22 @@ async function runStep(
       comparison: { verdict: comparison.verdict, metrics },
     });
     const status = judged.passed ? 'kept' : 'reverted';
-    const reason = judged.passed ? judged.details : judged.details || 'the proxied page did not improve';
-    emit({ type: 'step-end', order: step.order, fix: step.fix, status, reason });
-    return { order: step.order, fix: step.fix, title: title(step.fix), status, reason, gates: [gate] };
+    const recorded = finishStep(step, status, judged.passed ? judged.details : judged.details || 'the proxied page did not improve', proxy, [gate]);
+    emit({ type: 'step-end', order: step.order, fix: step.fix, status, reason: recorded.reason });
+    return recorded;
   } catch (err) {
-    const reason = err instanceof Error ? err.message : 'the runtime experiment failed';
-    emit({ type: 'step-end', order: step.order, fix: step.fix, status: 'reverted', reason });
-    return { order: step.order, fix: step.fix, title: title(step.fix), status: 'reverted', reason, gates: [{ name: 'performance', passed: false, details: reason }] };
+    const message = err instanceof Error ? err.message : 'the runtime experiment failed';
+    const recorded = finishStep(step, 'reverted', message, proxy, [{ name: 'performance', passed: false, details: message }]);
+    emit({ type: 'step-end', order: step.order, fix: step.fix, status: 'reverted', reason: recorded.reason });
+    return recorded;
   } finally {
     await proxy?.close();
   }
+}
+
+function finishStep(step: PlanStep, status: RuntimeStep['status'], reason: string, proxy: RuntimeProxy | null, gates: RuntimeStep['gates']): RuntimeStep {
+  const notes = [...(proxy?.notes ?? [])];
+  const extra = notes.filter((note) => !reason.includes(note)).join(' ');
+  const full = extra ? `${reason} ${extra}`.trim() : reason;
+  return { order: step.order, fix: step.fix, title: title(step.fix), status, reason: full, notes, gates };
 }

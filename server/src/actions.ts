@@ -8,6 +8,13 @@ export interface DispatchInput {
 }
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
+const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Directory the GitHub-hosted runner can create. Never a Windows path from the API machine. */
+export function actionsRunDir(jobId: string): string {
+  if (!JOB_ID.test(jobId)) throw new Error('job id is not a uuid');
+  return `runs/${jobId}`;
+}
 
 export function actionsTarget(owner: string, repo: string): { owner: string; repo: string } {
   if (!NAME.test(owner) || !NAME.test(repo)) throw new Error('GitHub owner or repo is not allowed');

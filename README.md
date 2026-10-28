@@ -9,7 +9,7 @@ PerfPilot is an autonomous web performance engineer for a frontend or DevOps wor
 - Runs URL-only experiments through a local rewrite proxy and the same performance judgment. Nothing is committed.
 - Fetches PageSpeed Insights (mobile) and Chrome UX Report (phone) field data when `GOOGLE_API_KEY` is set. A missing key is stored as a note and the job still succeeds.
 - Monitors a URL on a cron schedule or on demand, charts the trend, and sends email and Telegram.
-- Can dispatch the same job to GitHub Actions when `EXECUTOR=github`. The default executor is a local child process.
+- Can dispatch the same job to GitHub Actions when `EXECUTOR=github`. That executor is implemented and unit-tested, not yet run end to end on GitHub-hosted runners. The default executor is a local child process.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ flowchart LR
   server --> telegram
 ```
 
-The client talks only to the server. Vite proxies `/api` to port 8080. With `EXECUTOR=github`, the server dispatches `.github/workflows/perfpilot-job.yml` and the runner posts events to `/api/internal/jobs/:id/events`.
+The client talks only to the server. Vite proxies `/api` to port 8080. With `EXECUTOR=github`, the server dispatches `.github/workflows/perfpilot-job.yml` and the runner posts events to `/api/internal/jobs/:id/events`. That path is implemented and unit-tested, not yet run end to end on GitHub-hosted runners.
 
 ## Quickstart
 
@@ -149,7 +149,9 @@ Provider limits as of October 2026. This repo does not enforce them.
 - Login is one shared password, compared by SHA-256 digest with `timingSafeEqual`. The session cookie is `pp_session`, HttpOnly, 12 hours, HMAC-signed. Five failures per IP lock login for 15 minutes.
 - Internal routes (`/api/internal/run-due`, job spec, job events) require `x-job-secret`. An empty secret always returns 401.
 - Report HTML is escaped. Prompts tell the model that page content, findings, and gate failures are untrusted data.
-- GitHub is used to push a branch and open a pull request. There is no merge API call.
+- GitHub is used to push a branch and open a pull request. There is no merge API call. The GitHub Actions executor is implemented and unit-tested, not yet run end to end on GitHub-hosted runners.
+- The runtime proxy fetches with `redirect: manual`. A 3xx whose `Location` stays on the target origin is rewritten onto the proxy origin and returned to the browser, which follows it. Any other origin, a missing `Location`, or a chain past five hops returns `502` with the text `blocked redirect`, and the experiment result records that note. The proxy does not follow redirects itself.
+- Project URLs and the field, experiment, and monitor worker entry points accept only `http:` and `https:`, reject credentials, and reject URLs longer than 2048 characters. Link-local addresses (`169.254.0.0/16`), `fd00:ec2::254`, and `metadata.google.internal` are always rejected. Private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback, `::1`, and `fc00::/7` are rejected unless `ALLOW_PRIVATE_TARGETS=1` (the default when `NODE_ENV` is not `production`; the default in production is off). Hostnames are resolved with `dns.lookup` and every returned address is checked. A later change of that name (DNS rebinding) is not watched.
 - `npm run verify` runs `scripts/scan-secrets.mjs` over tracked files (file and line only) and `git log -p` (counts only).
 
 ## Testing

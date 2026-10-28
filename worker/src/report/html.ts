@@ -79,6 +79,8 @@ function fileStat(step: LedgerStep): string {
 export function renderReportHtml(ledger: Ledger, options: ReportOptions): string {
   const when = options.generatedAt ?? ledger.finishedAt;
   const kept = ledger.steps.filter((step) => step.status === 'kept');
+  const provenNoun = ledger.aiSource === 'runtime' ? 'proven runtime improvement' : 'proven performance improvement';
+  const proven = `${kept.length} ${provenNoun}${kept.length === 1 ? '' : 's'}`;
   const reverted = ledger.steps.filter((step) => step.status === 'reverted' || step.status === 'error');
   const skipped = ledger.steps.filter((step) => step.status === 'skipped');
   const remaining = skipped.filter((step) => /not auto-fixable|reported only|no applier/i.test(step.reason));
@@ -145,6 +147,7 @@ export function renderReportHtml(ledger: Ledger, options: ReportOptions): string
   <p>Target: ${escapeHtml(options.target)}</p>
   <p>Date: ${escapeHtml(when)}</p>
   <p>Tool version: ${escapeHtml(options.version)}</p>
+  <p>${escapeHtml(proven)}</p>
   <p>${escapeHtml(outcome(ledger))}</p>
   ${pr ? `<p>Pull request: <a href="${escapeHtml(pr)}">${escapeHtml(pr)}</a></p>` : ''}
 </section>

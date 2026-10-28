@@ -320,8 +320,11 @@ function changePct(before: number, after: number): string {
 }
 
 export function formatSummary(ledger: Ledger): string {
+  const keptCount = ledger.steps.filter((step) => step.status === 'kept').length;
   const lines = [
     '# PerfPilot optimize',
+    '',
+    `${keptCount} proven performance improvement${keptCount === 1 ? '' : 's'}`,
     '',
     `Repo: ${ledger.repo}`,
     `Run: ${ledger.runId}`,

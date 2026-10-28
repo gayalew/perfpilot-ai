@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "perfpilot-worker": "./dist/cli.js"
+    "perfpilot-worker": "./dist/worker/src/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

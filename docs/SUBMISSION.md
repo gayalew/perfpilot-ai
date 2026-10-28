@@ -15,7 +15,7 @@
 | API | What the code calls it for |
 | --- | --- |
 | Google Gemini | `worker/src/gemini.ts` plans fixes and edits files. The key is the `x-goog-api-key` header. |
-| GitHub REST | `worker/src/job-runner.ts` opens a pull request. `server/src/actions.ts` dispatches and cancels a workflow when `EXECUTOR=github`. `server/src/monitor/suspects.ts` lists commits. |
+| GitHub REST | `worker/src/job-runner.ts` opens a pull request. `server/src/actions.ts` dispatches and cancels a workflow when `EXECUTOR=github`. That executor is implemented and unit-tested, not yet run end to end on GitHub-hosted runners. `server/src/monitor/suspects.ts` lists commits. |
 | Resend | `server/src/notify/send.ts` sends email. |
 | Telegram Bot API | `server/src/notify/send.ts` sends the same notifications. |
 | Neon Postgres | `DATABASE_URL`. The server uses `pg`. Neon is the database, not an application API. |

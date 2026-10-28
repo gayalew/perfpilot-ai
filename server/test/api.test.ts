@@ -154,6 +154,20 @@ test('project validation and job creation', async () => {
       body: JSON.stringify({ name: 'URL', mode: 'url', url: 'http://localhost:4200/' }),
     });
     assert.equal(urlProject.status, 201);
+    const metadata = await fetch(`${base}/api/projects`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Metadata', mode: 'url', url: 'http://169.254.169.254/latest/meta-data/' }),
+    });
+    assert.equal(metadata.status, 400);
+    const metadataBody = (await metadata.json()) as { error: string };
+    assert.match(metadataBody.error, /link-local and cloud metadata/);
+    const google = await fetch(`${base}/api/projects`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Google metadata', mode: 'url', url: 'http://metadata.google.internal/' }),
+    });
+    assert.equal(google.status, 400);
     const urlBody = (await urlProject.json()) as { id: string };
     const repoProject = await fetch(`${base}/api/projects`, {
       method: 'POST',

@@ -112,7 +112,7 @@ export class GithubActionsExecutor implements Executor {
     return this.options.specFor(job, project);
   }
 
-  async ingest(jobId: string, type: string, payload: unknown): Promise<'ok' | 'missing' | 'closed'> {
+  async ingest(jobId: string, type: string, payload: unknown): Promise<'ok' | 'missing' | 'closed' | 'duplicate'> {
     return ingestWorkerEvent({
       stores: this.options.stores,
       bus: this.options.bus,

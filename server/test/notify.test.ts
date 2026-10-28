@@ -145,7 +145,9 @@ test('an experiment success notifies both channels and attaches the pdf', async 
   assert.match(calls.join('\n'), /api\.resend\.com\/emails/);
   assert.match(calls.join('\n'), /report\.pdf/);
   assert.match(calls.join('\n'), /sendDocument/);
-  assert.match(experimentMessage(created, 1, 'http://localhost:5173', job.id).subject, /1 proven improvements/);
+  assert.match(experimentMessage(created, 1, 'http://localhost:5173', job.id).subject, /1 proven runtime improvement on /);
+  assert.match(experimentMessage(created, 2, 'http://localhost:5173', job.id).subject, /2 proven runtime improvements on /);
+  assert.match(prMessage(created, 1, {}, 'https://github.com/acme/demo/pull/3').subject, /1 proven improvement on /);
 });
 
 test('notify env reads names without requiring them', () => {

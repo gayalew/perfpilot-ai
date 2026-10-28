@@ -69,3 +69,4 @@ A metric is a breach when `compareSamples` says `regressed` and `regressionCount
 - Profiles use Lighthouse simulated throttling (`throttlingMethod: "simulate"`), not a real slow network. The mobile profile is simulated slow 4G and a 4× CPU slowdown. That is more repeatable and is not a field trace.
 - Gate decisions are lab measurements on one machine. PSI and CrUX are stored separately and are not inputs to `judgePerformance`.
 - One laptop's background load still moves the medians. Interleaving and the noise floor reduce that; they do not remove it. Close other heavy apps before a demo run.
+- Target hostnames are checked once, with `dns.lookup`, before a field, experiment, or monitor job starts. A later change of that name (DNS rebinding) is not watched.

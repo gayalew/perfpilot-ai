@@ -69,7 +69,7 @@ export function prMessage(project: Project, kept: number, ledger: unknown, prUrl
     metricLine('TBT', before.tbt, after.tbt),
     metricLine('Weight', before.totalBytes, after.totalBytes),
   ].join('\n');
-  const subject = `PerfPilot opened a PR: ${kept} proven improvements on ${project.name}`;
+  const subject = `PerfPilot opened a PR: ${kept} proven improvement${kept === 1 ? '' : 's'} on ${project.name}`;
   const text = `${subject}\n\n${summary}\n\n${prUrl}`;
   const html = `<div style="font-family:Segoe UI,sans-serif;color:#18181b;line-height:1.5">
     <p style="font-size:16px">${escapeHtml(subject)}</p>
@@ -82,7 +82,7 @@ export function prMessage(project: Project, kept: number, ledger: unknown, prUrl
 
 export function experimentMessage(project: Project, kept: number, origin: string, jobId: string): Outbound {
   const link = jobLink(origin, jobId);
-  const subject = `PerfPilot runtime experiment: ${kept} proven improvements on ${project.name}`;
+  const subject = `PerfPilot runtime experiment: ${kept} proven runtime improvement${kept === 1 ? '' : 's'} on ${project.name}`;
   const text = `${subject}\n\n${link}`;
   const html = `<div style="font-family:Segoe UI,sans-serif;color:#18181b;line-height:1.5"><p>${escapeHtml(subject)}</p><p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p></div>`;
   const telegramHtml = `<b>${escapeTelegramHtml(subject)}</b>\n<a href="${escapeTelegramHtml(link)}">${escapeTelegramHtml(link)}</a>`;
